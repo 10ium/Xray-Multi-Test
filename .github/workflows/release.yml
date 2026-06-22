@@ -1,0 +1,63 @@
+name: Build & Release Android App
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'App Version Name (e.g., 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+jobs:
+  build:
+    name: Build Signed APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'zulu'
+          cache: 'gradle'
+
+      - name: Grant Execute Permission to Gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
+
+      # در صورتی که فایل Keystore برای امضای ریلیز تنظیم نشده باشد، گریدل به طور خودکار از کلید تست/دیباگ استفاده می‌کند تا بیلد با موفقیت انجام شود.
+      - name: Sign Release APK
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          HAS_KEYSTORE: ${{ secrets.SIGNING_KEY != '' }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          echo "$SIGNING_KEY" | base64 -d > app/release.keystore
+          # در صورتی که اسرار گیت‌هاب ست شده باشند، این بخش فایل Keystore را بازسازی می‌کند.
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version_name }}
+          name: Release v${{ github.event.inputs.version_name }} (Build ${{ github.run_number }})
+          body: |
+            ### مشخصات نسخه منتشر شده
+            - **نسخه نرم‌افزار (Version Name):** `${{ github.event.inputs.version_name }}`
+            - **شماره ساخت (Build Code):** `${{ github.run_number }}`
+            - **تاریخ ساخت:** ${{ github.event.repository.updated_at }}
+            - **توضیحات:** این نسخه به طور خودکار توسط گیت‌هاب اکشن کامپایل و امضا شده است. هسته پیش‌فرض و مکانیزم آپدیت خودکار در نرم‌افزار تعبیه شده است.
+          draft: false
+          prerelease: false
+          files: |
+            app/build/outputs/apk/release/app-release.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
