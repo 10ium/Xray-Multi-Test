@@ -85,26 +85,21 @@ fun MainScreen() {
     var localCoreVersion by remember { mutableStateOf(sharedPrefs.getString("core_version", strings.unknown) ?: strings.unknown) }
     var latestCoreVersion by remember { mutableStateOf(strings.unknown) }
 
-    // فیلدهای شخصی‌سازی پورت و زمان انتظار تست
     var testTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("test_timeout", "5000") ?: "5000") }
     var socksPortInput by remember { mutableStateOf(sharedPrefs.getString("socks_port", "20000") ?: "20000") }
 
-    // فیلدهای شبیه‌سازی فرگمنت و پنهان‌سازی SNI [11]
     var isFragmentEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_fragment_enabled", false)) }
     var fragmentLengthInput by remember { mutableStateOf(sharedPrefs.getString("fragment_length", "100-200") ?: "100-200") }
     var fragmentIntervalInput by remember { mutableStateOf(sharedPrefs.getString("fragment_interval", "10-20") ?: "10-20") }
 
-    // فیلدهای مالتی‌پلکسر ترافیک لوکال
     var isMuxEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_mux_enabled", false)) }
     var muxConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("mux_concurrency", "8") ?: "8") }
     var xudpConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("xudp_concurrency", "16") ?: "16") }
 
-    // انتخاب اثر انگشت مرورگرها (uTLS)
     val fingerprintOptions = listOf("chrome", "firefox", "safari", "randomized", "unsafe")
     var selectedFingerprint by remember { mutableStateOf(sharedPrefs.getString("selected_fp", "chrome") ?: "chrome") }
     var isFpDropdownExpanded by remember { mutableStateOf(false) }
 
-    // ۱۱ وب‌سایت فیلتر و تحریم انتخابی شما [11]
     val testTargets = remember {
         mutableStateListOf(
             TestTarget("telegram.org", "Telegram"),
@@ -215,7 +210,6 @@ fun MainScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // ۱. هدر نسخه و بیلد اختصاصی
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -243,7 +237,8 @@ fun MainScreen() {
                                 enabled = !isCheckingCore,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                if (isCheckingCore) CircularProgressIndicator(size = 18.dp, color = Color.White)
+                                // رفع قطعی خطای کمپوزر مادی‌ان‌ال با حذف پارامتر منسوخ شده مستقیم size و اعمال Modifier.size
+                                if (isCheckingCore) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
                                 else Text(strings.checkVersionBtn, fontSize = 12.sp, textAlign = TextAlign.Center)
                             }
 
@@ -283,7 +278,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۲. ورود کانفیگ‌ها با پشتیبانی از ورودی‌های مخدوش [9]
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -352,7 +346,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۳. منوی گزینش اثر انگشت uTLS و شبیه‌ساز مرورگرها
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -389,7 +382,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۴. پیکربندی دور زدن مسدودسازی SNI با تکنولوژی تکه‌تکه کردن پکت هندشیک (Fragment) [11]
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -437,7 +429,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۵. تنظیمات چندگانه‌سازی کانکشن‌ها (Multiplexing Mux)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -485,7 +476,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۶. چک‌باکس‌های وب‌سایت‌های تحت تست سرعت و دسترسی
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -519,7 +509,6 @@ fun MainScreen() {
                 }
             }
 
-            // ۷. تنظیمات ثانویه پورت لوکال و زمان پاسخ تست خام
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -553,7 +542,6 @@ fun MainScreen() {
                 }
             }
 
-            // عملیات شروع تست تشخیص شبکه موازی
             if (configsList.isNotEmpty()) {
                 item {
                     Button(
@@ -565,7 +553,6 @@ fun MainScreen() {
                                 val activeDomains = testTargets.filter { it.isSelected }.map { it.domain }
 
                                 configsList.forEach { config ->
-                                    // تزریق تنظیمات پیشرفته رابط کاربری به بایت‌های کانفیگ جاری در زمان اجرای تست واقعی
                                     val customConfig = config.copy(
                                         fingerprint = selectedFingerprint,
                                         isFragmentEnabled = isFragmentEnabled,
@@ -629,12 +616,12 @@ fun MainScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) {
-                        if (isTestingNetwork) CircularProgressIndicator(size = 18.dp, color = Color.White)
+                        // تصحیح نهایی کامپوننت چرخش مادی‌ان‌ال با قرارگیری Modifier.size مناسب جهت دور زدن خطای کامپایل
+                        if (isTestingNetwork) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
                         else Text(strings.runTestsBtn, fontWeight = FontWeight.Bold)
                     }
                 }
 
-                // صادر کردن کانفیگ‌های فیلتر نشده سالم
                 item {
                     Button(
                         onClick = {
@@ -660,7 +647,6 @@ fun MainScreen() {
                 }
             }
 
-            // گزارش لایو نتایج به کاربر به صورت تفکیک شده
             if (testResults.isNotEmpty()) {
                 item {
                     Text(strings.testResultsTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
