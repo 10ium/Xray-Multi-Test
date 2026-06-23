@@ -65,8 +65,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("androidx.activity:activity-compose:1.8.2")
     
-    // جت‌پک کامپوز برای رابط کاربری مدرن
-    implementation(platform("androidx.compose:compose-bom:228f1e1")) // استفاده از بوم پایدار و هماهنگ
+    // تصحیح نسخه BOM جت‌پک کامپوز به نسخه رسمی و پایدار سال ۲۰۲۴
+    implementation(platform("androidx.compose:compose-bom:2024.02.01"))
+    
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
