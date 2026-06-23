@@ -85,10 +85,26 @@ fun MainScreen() {
     var localCoreVersion by remember { mutableStateOf(sharedPrefs.getString("core_version", strings.unknown) ?: strings.unknown) }
     var latestCoreVersion by remember { mutableStateOf(strings.unknown) }
 
+    // فیلدهای شخصی‌سازی پورت و زمان انتظار تست
     var testTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("test_timeout", "5000") ?: "5000") }
     var socksPortInput by remember { mutableStateOf(sharedPrefs.getString("socks_port", "20000") ?: "20000") }
 
-    // ۱۱ وب‌سایت پیش‌فرض فیلتر یا تحریم درخواستی شما
+    // فیلدهای شبیه‌سازی فرگمنت و پنهان‌سازی SNI [11]
+    var isFragmentEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_fragment_enabled", false)) }
+    var fragmentLengthInput by remember { mutableStateOf(sharedPrefs.getString("fragment_length", "100-200") ?: "100-200") }
+    var fragmentIntervalInput by remember { mutableStateOf(sharedPrefs.getString("fragment_interval", "10-20") ?: "10-20") }
+
+    // فیلدهای مالتی‌پلکسر ترافیک لوکال
+    var isMuxEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_mux_enabled", false)) }
+    var muxConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("mux_concurrency", "8") ?: "8") }
+    var xudpConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("xudp_concurrency", "16") ?: "16") }
+
+    // انتخاب اثر انگشت مرورگرها (uTLS)
+    val fingerprintOptions = listOf("chrome", "firefox", "safari", "randomized", "unsafe")
+    var selectedFingerprint by remember { mutableStateOf(sharedPrefs.getString("selected_fp", "chrome") ?: "chrome") }
+    var isFpDropdownExpanded by remember { mutableStateOf(false) }
+
+    // ۱۱ وب‌سایت فیلتر و تحریم انتخابی شما [11]
     val testTargets = remember {
         mutableStateListOf(
             TestTarget("telegram.org", "Telegram"),
@@ -199,7 +215,7 @@ fun MainScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // هدر نسخه اپ و هسته
+            // ۱. هدر نسخه و بیلد اختصاصی
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -267,7 +283,7 @@ fun MainScreen() {
                 }
             }
 
-            // بخش افزودن کانفیگ‌ها
+            // ۲. ورود کانفیگ‌ها با پشتیبانی از ورودی‌های مخدوش [9]
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -336,7 +352,140 @@ fun MainScreen() {
                 }
             }
 
-            // چک‌باکس مدیریت وب‌سایت‌های تحت تست سرعت و فیلترینگ
+            // ۳. منوی گزینش اثر انگشت uTLS و شبیه‌ساز مرورگرها
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(strings.tlsFingerprint, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedButton(
+                                onClick = { isFpDropdownExpanded = true },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(selectedFingerprint.uppercase(), color = Color.White)
+                            }
+                            DropdownMenu(
+                                expanded = isFpDropdownExpanded,
+                                onDismissRequest = { isFpDropdownExpanded = false }
+                            ) {
+                                fingerprintOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.uppercase()) },
+                                        onClick = {
+                                            selectedFingerprint = option
+                                            sharedPrefs.edit().putString("selected_fp", option).apply()
+                                            isFpDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ۴. پیکربندی دور زدن مسدودسازی SNI با تکنولوژی تکه‌تکه کردن پکت هندشیک (Fragment) [11]
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(strings.fragmentSettings, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.secondary)
+                            Switch(
+                                checked = isFragmentEnabled,
+                                onCheckedChange = {
+                                    isFragmentEnabled = it
+                                    sharedPrefs.edit().putBoolean("is_fragment_enabled", it).apply()
+                                }
+                            )
+                        }
+                        
+                        if (isFragmentEnabled) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = fragmentLengthInput,
+                                onValueChange = {
+                                    fragmentLengthInput = it
+                                    sharedPrefs.edit().putString("fragment_length", it).apply()
+                                },
+                                label = { Text(strings.fragmentLength) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = fragmentIntervalInput,
+                                onValueChange = {
+                                    fragmentIntervalInput = it
+                                    sharedPrefs.edit().putString("fragment_interval", it).apply()
+                                },
+                                label = { Text(strings.fragmentInterval) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ۵. تنظیمات چندگانه‌سازی کانکشن‌ها (Multiplexing Mux)
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(strings.muxSettings, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = MaterialTheme.colorScheme.secondary)
+                            Switch(
+                                checked = isMuxEnabled,
+                                onCheckedChange = {
+                                    isMuxEnabled = it
+                                    sharedPrefs.edit().putBoolean("is_mux_enabled", it).apply()
+                                }
+                            )
+                        }
+
+                        if (isMuxEnabled) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = muxConcurrencyInput,
+                                onValueChange = {
+                                    muxConcurrencyInput = it
+                                    sharedPrefs.edit().putString("mux_concurrency", it).apply()
+                                },
+                                label = { Text(strings.muxConcurrency) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = xudpConcurrencyInput,
+                                onValueChange = {
+                                    xudpConcurrencyInput = it
+                                    sharedPrefs.edit().putString("xudp_concurrency", it).apply()
+                                },
+                                label = { Text(strings.xudpConcurrencyLabel) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ۶. چک‌باکس‌های وب‌سایت‌های تحت تست سرعت و دسترسی
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -370,7 +519,7 @@ fun MainScreen() {
                 }
             }
 
-            // تنظیمات ثانویه پورت‌ها
+            // ۷. تنظیمات ثانویه پورت لوکال و زمان پاسخ تست خام
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -404,7 +553,7 @@ fun MainScreen() {
                 }
             }
 
-            // اجرای فرآیند ارزیابی
+            // عملیات شروع تست تشخیص شبکه موازی
             if (configsList.isNotEmpty()) {
                 item {
                     Button(
@@ -416,24 +565,32 @@ fun MainScreen() {
                                 val activeDomains = testTargets.filter { it.isSelected }.map { it.domain }
 
                                 configsList.forEach { config ->
-                                    val result = TestResult(config)
-                                    testResults[config.raw] = result
+                                    // تزریق تنظیمات پیشرفته رابط کاربری به بایت‌های کانفیگ جاری در زمان اجرای تست واقعی
+                                    val customConfig = config.copy(
+                                        fingerprint = selectedFingerprint,
+                                        isFragmentEnabled = isFragmentEnabled,
+                                        fragmentLength = fragmentLengthInput,
+                                        fragmentInterval = fragmentIntervalInput,
+                                        isMuxEnabled = isMuxEnabled,
+                                        muxConcurrency = muxConcurrencyInput.toIntOrNull() ?: 8,
+                                        xudpConcurrency = xudpConcurrencyInput.toIntOrNull() ?: 16
+                                    )
 
-                                    // لایه اول: پینگ TCP اولیه برای صحت اتصال سرور
-                                    val tcpPing = XrayManager.performTcpPing(config.address, config.port, timeout)
+                                    val result = TestResult(customConfig)
+                                    testResults[customConfig.raw] = result
+
+                                    val tcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, timeout)
                                     result.tcpPing = tcpPing
 
                                     if (tcpPing > 0) {
-                                        result.jitter = XrayManager.calculateJitter(config.address, config.port, timeout)
+                                        result.jitter = XrayManager.calculateJitter(customConfig.address, customConfig.port, timeout)
                                         
-                                        // تولید و ذخیره موقت فایل پیکربندی هسته Xray بر اساس مستندات ارائه شده
                                         val xrayConfigFile = File(context.filesDir, "temp_config.json")
-                                        val jsonConfigString = XrayManager.generateXrayJsonConfig(config, socksPort)
+                                        val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, socksPort)
                                         FileOutputStream(xrayConfigFile).use { fos ->
                                             fos.write(jsonConfigString.toByteArray())
                                         }
 
-                                        // تلاش برای اجرای پروسس هسته Xray به همراه لایف‌سایکل اختصاصی
                                         var xrayProcess: Process? = null
                                         try {
                                             val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
@@ -441,34 +598,29 @@ fun MainScreen() {
                                                 .directory(context.filesDir)
                                                 .start()
 
-                                            // وقفه کوتاه جهت لود موفق هسته و شنود پورت SOCKS
                                             kotlinx.coroutines.delay(500)
                                         } catch (e: Exception) {
                                             e.printStackTrace()
                                         }
 
-                                        // لایه دوم: ارزیابی سرعت و دامنه‌ها از درون تونل هسته Xray
                                         try {
                                             result.isHealthy = true
                                             
-                                            // بررسی تفکیک شده وضعیت تک‌تک وب‌سایت‌ها از درون پروکسی
                                             for (domain in activeDomains) {
                                                 val report = XrayManager.checkRealProxyDiagnostic(domain, socksPort, timeout)
                                                 result.siteReports.add(report)
                                             }
 
-                                            // بنچمارک سرعت واقعی بر بستر HTTP کلادفلر
                                             result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, timeout)
                                             result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, timeout)
 
                                         } catch (e: Exception) {
                                             result.isHealthy = false
                                         } finally {
-                                            // حذف فایل پیکربندی موقت و بستن پروسس برای جلوگیری از نشت حافظه
                                             xrayProcess?.destroy()
                                         }
                                     }
-                                    testResults[config.raw] = result
+                                    testResults[customConfig.raw] = result
                                 }
                                 isTestingNetwork = false
                             }
@@ -482,7 +634,7 @@ fun MainScreen() {
                     }
                 }
 
-                // صادر کردن کانفیگ‌های سالم فیلتر نشده به کلیپ‌بورد
+                // صادر کردن کانفیگ‌های فیلتر نشده سالم
                 item {
                     Button(
                         onClick = {
@@ -508,7 +660,7 @@ fun MainScreen() {
                 }
             }
 
-            // لیست تبلور یافته نتایج
+            // گزارش لایو نتایج به کاربر به صورت تفکیک شده
             if (testResults.isNotEmpty()) {
                 item {
                     Text(strings.testResultsTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
@@ -545,8 +697,8 @@ fun MainScreen() {
                                         result.siteReports.forEach { report ->
                                             val badgeColor = when (report.status) {
                                                 SiteStatus.SAFE -> Color.Green
-                                                SiteStatus.SANCTIONED -> Color(0xFFFF9800) // نارنجی تحریم
-                                                SiteStatus.POISONED -> Color.Red // فیلترینگ شدید دی‌ان‌اس
+                                                SiteStatus.SANCTIONED -> Color(0xFFFF9800)
+                                                SiteStatus.POISONED -> Color.Red
                                                 SiteStatus.FAILED -> Color.Gray
                                             }
                                             
