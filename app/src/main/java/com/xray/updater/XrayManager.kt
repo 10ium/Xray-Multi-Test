@@ -108,12 +108,13 @@ data class DiagnosticReport(
 data class TestResult(
     val config: XrayConfig,
     var tcpPing: Long = -1,
-    var jitter: Double = -1.0,
+    var Jitter: Double = -1.0,
     var realDelay: Long = -1,
     var downloadSpeedMbps: Double = -1.0,
     var uploadSpeedMbps: Double = -1.0,
     val siteReports: MutableList<DiagnosticReport> = mutableListOf(),
-    var isHealthy: Boolean = false
+    var isHealthy: Boolean = false,
+    var smartScore: Double = 0.0 // امتیاز هوشمند بسیار دقیق و اعشاری جهت رتبه‌بندی بدون تساوی
 )
 
 object XrayManager {
@@ -220,7 +221,6 @@ object XrayManager {
         return@withContext false
     }
 
-    // پارسر هوشمند با پشتیبانی کامل از متن‌های مخدوش به همراه دکود بیس۶۴ [9, 14]
     fun parseConfigsFromMessyText(rawText: String): List<XrayConfig> {
         val cleanedText = rawText.replace(CONTROL_CHARS_REGEX, "").trim()
         val configs = mutableListOf<XrayConfig>()
@@ -236,7 +236,7 @@ object XrayManager {
                         targetText = decodedStr
                     }
                 } catch (e: Exception) {
-                    // در صورت خطای بیس۶۴ فرآیند تصفیه متن اصلی ادامه می‌یابد
+                    // نادیده گرفتن خطا
                 }
             }
         }
@@ -462,7 +462,6 @@ object XrayManager {
         return configs
     }
 
-    // متد اصلاح‌شده تولید خودکار و پویا ساختار فایل پیکربندی به روش تخصیص بدون لامبدا جهت رفع کامل ارور Unresolved Reference
     fun generateXrayJsonConfig(config: XrayConfig, socksPort: Int): String {
         val outJson = JSONObject().apply {
             put("protocol", when(config.protocol) {
@@ -571,9 +570,7 @@ object XrayManager {
             }
             put("settings", settings)
 
-            // لایه انتقال و امنیت (StreamSettings)
             val streamSettings = JSONObject()
-            
             val networkType = when (config.protocol) {
                 "xhttp" -> "xhttp"
                 "wireguard", "wg" -> "raw"
@@ -660,7 +657,6 @@ object XrayManager {
                 }
             }
 
-            // لایه فرستنده و مسیریابی سوکت محلی اصلاح شده جهت رفع قطعی باگ Unresolved Reference
             val sockopt = JSONObject()
             if (config.isHappyEyeballsEnabled) {
                 sockopt.put("domainStrategy", "ForceIP")
@@ -672,7 +668,6 @@ object XrayManager {
                 sockopt.put("happyEyeballs", happyEyeballs)
             }
             
-            // پیاده‌سازی اصلاح‌شده فرگمنت (Fragment) تحت عنوان لایه‌گذاری فینال‌ماسک ترافیکی
             val finalmask = JSONObject()
             if (config.isFragmentEnabled) {
                 val tcpArray = JSONArray()
@@ -690,7 +685,6 @@ object XrayManager {
                 finalmask.put("tcp", tcpArray)
             }
 
-            // ادغام پارامترهای جهش پورت (UDP Port Hopping) و تنظیمات Brutal برای هیستریا و XHTTP H3
             if (config.hyUdpHop.isNotEmpty() && (config.protocol.contains("hysteria") || config.protocol == "xhttp")) {
                 val quicParams = JSONObject()
                 quicParams.put("congestion", "force-brutal")
@@ -709,7 +703,6 @@ object XrayManager {
             streamSettings.put("finalmask", finalmask)
             put("streamSettings", streamSettings)
 
-            // تنظیمات Multiplexing لایه‌های ترافیکی موازی (Mux & XUDP)
             if (config.isMuxEnabled) {
                 val mux = JSONObject().apply {
                     put("enabled", true)
@@ -776,6 +769,7 @@ object XrayManager {
         return@withContext sqrt(variance)
     }
 
+    // متد تصحیح‌شده و بدون باگ ترافیکی جهت واگذاری رفع آدرس دامنه‌ها به صورت ۱۰۰٪ به سمت سرور پروکسی [11]
     suspend fun checkRealProxyDiagnostic(
         domain: String,
         socksPort: Int,
@@ -794,32 +788,55 @@ object XrayManager {
             .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Xray-Multi-Test-Android")
             .build()
 
-        var resolvedIP = "0.0.0.0"
         try {
-            resolvedIP = java.net.InetAddress.getByName(domain).hostAddress ?: "0.0.0.0"
-            if (resolvedIP.startsWith("10.10.34.")) {
-                return@withContext DiagnosticReport(domain, SiteStatus.POISONED, System.currentTimeMillis() - start, resolvedIP)
-            }
-
+            // حل باگ: در اینجا حل دی‌ان‌اس را از لوکال دستگاه برداشته‌ایم تا دامنه‌ها از داخل تونل پروکسی هدایت شوند
             proxyClient.newCall(request).execute().use { response ->
                 val rtt = System.currentTimeMillis() - start
-                return@withContext when (response.code) {
-                    200, 204 -> DiagnosticReport(domain, SiteStatus.SAFE, rtt, resolvedIP)
-                    403 -> DiagnosticReport(domain, SiteStatus.SANCTIONED, rtt, resolvedIP)
-                    else -> DiagnosticReport(domain, SiteStatus.FAILED, rtt, resolvedIP)
+                val status = when (response.code) {
+                    200, 204 -> SiteStatus.SAFE
+                    403 -> SiteStatus.SANCTIONED
+                    else -> SiteStatus.FAILED
                 }
+                return@withContext DiagnosticReport(domain, status, rtt, "Resolved by Proxy")
             }
         } catch (e: Exception) {
             val rtt = System.currentTimeMillis() - start
-            return@withContext DiagnosticReport(domain, SiteStatus.FAILED, rtt, resolvedIP)
+            return@withContext DiagnosticReport(domain, SiteStatus.FAILED, rtt, "0.0.0.0")
         }
     }
 
+    // تست تاخیر واقعی ترافیکی به صورت ۱۰۰٪ تونل شده از آدرس دلخواه کاربر
+    suspend fun performRealDelay(
+        socksPort: Int,
+        timeoutMs: Int,
+        testUrl: String
+    ): Long = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+        try {
+            val proxyClient = OkHttpClient.Builder()
+                .proxy(proxy)
+                .connectTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
+                .readTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
+                .build()
+            val request = Request.Builder().url(testUrl).build()
+            proxyClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful || response.code == 204) {
+                    return@withContext System.currentTimeMillis() - start
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return@withContext -1L
+    }
+
+    // بنچمارک دقیق سرعت دانلود و سرعت آپلود به صورت کاملاً تونل شده از پروکسی SOCKS
     suspend fun performDownloadSpeedTest(
         socksPort: Int,
-        timeoutMs: Int
+        timeoutMs: Int,
+        testUrl: String
     ): Double = withContext(Dispatchers.IO) {
-        val speedTestUrl = "http://speed.cloudflare.com/__down?bytes=1048576"
         val start = System.currentTimeMillis()
         var totalBytesRead = 0L
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
@@ -831,12 +848,12 @@ object XrayManager {
                 .readTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
                 .build()
 
-            val request = Request.Builder().url(speedTestUrl).build()
+            val request = Request.Builder().url(testUrl).build()
             proxyClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext 0.0
                 val body = response.body ?: return@withContext 0.0
                 val stream = body.byteStream()
-                val buffer = ByteArray(4096)
+                val buffer = ByteArray(8192)
                 var bytesRead: Int
                 while (stream.read(buffer).also { bytesRead = it } != -1) {
                     totalBytesRead += bytesRead
@@ -854,9 +871,9 @@ object XrayManager {
 
     suspend fun performUploadSpeedTest(
         socksPort: Int,
-        timeoutMs: Int
+        timeoutMs: Int,
+        testUrl: String
     ): Double = withContext(Dispatchers.IO) {
-        val speedTestUrl = "https://speed.cloudflare.com/__up"
         val dummyPayload = ByteArray(250 * 1024)
         val start = System.currentTimeMillis()
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
@@ -869,7 +886,7 @@ object XrayManager {
                 .build()
 
             val request = Request.Builder()
-                .url(speedTestUrl)
+                .url(testUrl)
                 .post(dummyPayload.toRequestBody())
                 .build()
 
