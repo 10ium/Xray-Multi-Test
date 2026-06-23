@@ -11,17 +11,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -30,13 +27,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStreamReader
 import java.net.InetSocketAddress
-import java.net.Proxy
 import java.net.Socket
 import java.util.regex.Pattern
 
@@ -85,21 +83,49 @@ fun MainScreen() {
     var localCoreVersion by remember { mutableStateOf(sharedPrefs.getString("core_version", strings.unknown) ?: strings.unknown) }
     var latestCoreVersion by remember { mutableStateOf(strings.unknown) }
 
-    var testTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("test_timeout", "5000") ?: "5000") }
+    // تنظیمات پورت لوکال و همزمانی تسک‌ها
     var socksPortInput by remember { mutableStateOf(sharedPrefs.getString("socks_port", "20000") ?: "20000") }
+    var concurrencyInput by remember { mutableStateOf(sharedPrefs.getString("concurrency_limit", "3") ?: "3") }
 
+    // فیلدهای زمان مهلت انتظار (تایم‌اوت‌های مجزا)
+    var pingTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("timeout_ping", "2500") ?: "2500") }
+    var realDelayTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("timeout_real_delay", "5000") ?: "5000") }
+    var speedTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("timeout_speed", "10000") ?: "10000") }
+
+    // آدرس‌های تست سرعت دانلود و تاخیر واقعی قابل شخصی‌سازی
+    var speedTestUrlInput by remember { mutableStateOf(sharedPrefs.getString("url_speed_test", "http://speed.cloudflare.com/__down?bytes=1048576") ?: "http://speed.cloudflare.com/__down?bytes=1048576") }
+    var realDelayUrlInput by remember { mutableStateOf(sharedPrefs.getString("url_real_delay", "https://cp.cloudflare.com/generate_204") ?: "https://cp.cloudflare.com/generate_204") }
+
+    // تیک‌باکس گزینش انواع تست‌ها
+    var isTcpPingChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_tcp", true)) }
+    var isJitterChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_jitter", true)) }
+    var isRealDelayChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_real_delay", true)) }
+    var isWebsiteReachChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_websites", true)) }
+    var isDownloadSpeedChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_download", true)) }
+    var isUploadSpeedChecked by remember { mutableStateOf(sharedPrefs.getBoolean("test_chk_upload", true)) }
+
+    // ورودی متن چندخطی برای وب‌سایت‌های دلخواه کاربر
+    var customWebsitesInput by remember { mutableStateOf(sharedPrefs.getString("custom_websites_list", "") ?: "") }
+
+    // فیلد تعداد خروجی برترین‌ها جهت محدود کردن کانفیگ‌ها
+    var exportLimitInput by remember { mutableStateOf("10") }
+
+    // فیلدهای شبیه‌سازی فرگمنت و پنهان‌سازی SNI
     var isFragmentEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_fragment_enabled", false)) }
     var fragmentLengthInput by remember { mutableStateOf(sharedPrefs.getString("fragment_length", "100-200") ?: "100-200") }
     var fragmentIntervalInput by remember { mutableStateOf(sharedPrefs.getString("fragment_interval", "10-20") ?: "10-20") }
 
+    // فیلدهای مالتی‌پلکسر ترافیک لوکال
     var isMuxEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("is_mux_enabled", false)) }
     var muxConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("mux_concurrency", "8") ?: "8") }
     var xudpConcurrencyInput by remember { mutableStateOf(sharedPrefs.getString("xudp_concurrency", "16") ?: "16") }
 
+    // اثر انگشت uTLS
     val fingerprintOptions = listOf("chrome", "firefox", "safari", "randomized", "unsafe")
     var selectedFingerprint by remember { mutableStateOf(sharedPrefs.getString("selected_fp", "chrome") ?: "chrome") }
     var isFpDropdownExpanded by remember { mutableStateOf(false) }
 
+    // دامنه‌های تستی پیش‌فرض ۱۱ وب‌سایت فیلتر و تحریم
     val testTargets = remember {
         mutableStateListOf(
             TestTarget("telegram.org", "Telegram"),
@@ -126,6 +152,31 @@ fun MainScreen() {
     var coreProgressText by remember { mutableStateOf("") }
     var isTestingNetwork by remember { mutableStateOf(false) }
 
+    // متغیر محتوای خروجی جهت واگذاری به لانچر ساخت فایل متنی (.txt)
+    var fileContentToExport by remember { mutableStateOf("") }
+    val fileExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri: Uri? ->
+        uri?.let {
+            coroutineScope.launch(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(it)?.use { _ ->
+                        context.contentResolver.openOutputStream(it)?.use { outputStream ->
+                            outputStream.write(fileContentToExport.toByteArray())
+                        }
+                    }
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "فایل خروجی با موفقیت ذخیره شد", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(context, "خطا در ذخیره‌سازی فایل", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+    }
+
     fun parseGithubUrl(url: String): String {
         val githubBlobPattern = Pattern.compile("https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)")
         val matcher = githubBlobPattern.matcher(url.trim())
@@ -143,10 +194,8 @@ fun MainScreen() {
         val cleanText = text.trim()
         if (cleanText.isEmpty()) return ""
         if (cleanText.contains("://")) return cleanText
-        
         val b64Chars = cleanText.replace(Regex("[^a-zA-Z0-9+/=_-]"), "")
         if (b64Chars.length < 10) return cleanText
-
         return try {
             val decodedBytes = android.util.Base64.decode(b64Chars, android.util.Base64.DEFAULT)
             val decodedStr = String(decodedBytes, Charsets.UTF_8)
@@ -158,6 +207,62 @@ fun MainScreen() {
         } catch (e: Exception) {
             cleanText
         }
+    }
+
+    // فرمول امتیازدهی اعشاری فوق دقیق (Precision Smart Score) بر اساس ضرایب ریزسنجی میلی‌ثانیه پینگ خام
+    fun calculatePreciseScore(res: TestResult, totalSites: Int): Double {
+        if (res.tcpPing <= 0) return 0.0
+
+        // ۱. امتیاز پینگ خام TCP (تا سقف ۲۵ امتیاز)
+        val pingScore = when {
+            res.tcpPing <= 20 -> 25.0
+            res.tcpPing >= 1500 -> 0.0
+            else -> 25.0 * (1.0 - (res.tcpPing - 20) / 1480.0)
+        }
+
+        // ۲. امتیاز جیتر نوسان پینگ (تا سقف ۱۵ امتیاز)
+        val jitterScore = when {
+            res.Jitter <= 0.0 -> 0.0
+            res.Jitter <= 1.0 -> 15.0
+            res.Jitter >= 150.0 -> 0.0
+            else -> 15.0 * (1.0 - (res.Jitter - 1.0) / 149.0)
+        }
+
+        // ۳. امتیاز تأخیر واقعی پورت SOCKS پروکسی (تا سقف ۲۵ امتیاز)
+        val realDelayScore = when {
+            res.realDelay <= 0 -> 0.0
+            res.realDelay <= 100 -> 25.0
+            res.realDelay >= 2500 -> 0.0
+            else -> 25.0 * (1.0 - (res.realDelay - 100) / 2400.0)
+        }
+
+        // ۴. امتیاز سرعت دانلود (تا سقف ۱۵ امتیاز - سقف ۱۰۰ مگابیت بر ثانیه)
+        val downloadScore = when {
+            res.downloadSpeedMbps <= 0.0 -> 0.0
+            res.downloadSpeedMbps >= 100.0 -> 15.0
+            else -> 15.0 * (res.downloadSpeedMbps / 100.0)
+        }
+
+        // ۵. امتیاز سرعت آپلود (تا سقف ۱۰ امتیاز - سقف ۵۰ مگابیت بر ثانیه)
+        val uploadScore = when {
+            res.uploadSpeedMbps <= 0.0 -> 0.0
+            res.uploadSpeedMbps >= 50.0 -> 10.0
+            else -> 10.0 * (res.uploadSpeedMbps / 50.0)
+        }
+
+        // ۶. امتیاز دسترسی به وب‌سایت‌های فیلتر/تحریم (تا سقف ۱۰ امتیاز)
+        val successfulSites = res.siteReports.count { it.status == SiteStatus.SAFE }
+        val websiteScore = if (totalSites > 0) {
+            10.0 * (successfulSites.toDouble() / totalSites.toDouble())
+        } else {
+            10.0
+        }
+
+        // ضریب ریزسنجی انحصاری میلی‌ثانیه‌ای (Micro-metric) جهت متمایز کردن کامل رتبه کانفیگ‌ها
+        val microMetric = (res.tcpPing % 100).toDouble() / 10000.0 + (res.realDelay % 100).toDouble() / 100000.0
+
+        val total = pingScore + jitterScore + realDelayScore + downloadScore + uploadScore + websiteScore + microMetric
+        return Math.min(100.0, Math.max(0.0, total))
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -196,7 +301,7 @@ fun MainScreen() {
                         onClick = { Localization.toggleLanguage() },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text(strings.languageBtn, color = Color.White, fontSize = 12.sp)
+                        Text(strings.languageBtn, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -210,6 +315,7 @@ fun MainScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // ۱. کارت اطلاعات هسته با کنتراست اصلاح‌شده رنگ سفید دکمه‌ها
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -235,11 +341,11 @@ fun MainScreen() {
                                     }
                                 },
                                 enabled = !isCheckingCore,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
-                                // رفع قطعی خطای کمپوزر مادی‌ان‌ال با حذف پارامتر منسوخ شده مستقیم size و اعمال Modifier.size
                                 if (isCheckingCore) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
-                                else Text(strings.checkVersionBtn, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                else Text(strings.checkVersionBtn, fontSize = 12.sp, textAlign = TextAlign.Center, color = Color.White, fontWeight = FontWeight.Bold)
                             }
 
                             Button(
@@ -263,9 +369,10 @@ fun MainScreen() {
                                     }
                                 },
                                 enabled = latestCoreVersion != strings.unknown && !isDownloadingCore,
-                                modifier = Modifier.weight(1f)
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                             ) {
-                                Text(strings.downloadCoreBtn, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                Text(strings.downloadCoreBtn, fontSize = 12.sp, textAlign = TextAlign.Center, color = Color.White, fontWeight = FontWeight.Bold)
                             }
                         }
 
@@ -278,6 +385,7 @@ fun MainScreen() {
                 }
             }
 
+            // ۲. بخش دریافت کانفیگ‌ها
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -300,18 +408,20 @@ fun MainScreen() {
                                     Toast.makeText(context, "${parsed.size} کانفیگ با موفقیت دریافت شد", Toast.LENGTH_SHORT).show()
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
-                            Text(strings.importClipboard)
+                            Text(strings.importClipboard, color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
 
                         Button(
                             onClick = { filePickerLauncher.launch("text/*") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
-                            Text(strings.importFile)
+                            Text(strings.importFile, color = Color.White, fontWeight = FontWeight.Bold)
                         }
 
                         Spacer(modifier = Modifier.height(12.dp))
@@ -338,14 +448,16 @@ fun MainScreen() {
                                     }
                                 }
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                         ) {
-                            Text(strings.importSubLink)
+                            Text(strings.importSubLink, color = Color.White, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
             }
 
+            // ۳. منوی اثر انگشت TLS uTLS
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -360,7 +472,7 @@ fun MainScreen() {
                                 onClick = { isFpDropdownExpanded = true },
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                Text(selectedFingerprint.uppercase(), color = Color.White)
+                                Text(selectedFingerprint.uppercase(), color = Color.White, fontWeight = FontWeight.Bold)
                             }
                             DropdownMenu(
                                 expanded = isFpDropdownExpanded,
@@ -382,6 +494,146 @@ fun MainScreen() {
                 }
             }
 
+            // ۴. شخصی‌سازی پورت، آدرس‌ها، تایم‌اوت‌ها، تعداد تست‌های همزمان و چک‌باکس گزینش انواع تست‌ها
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(strings.settingsTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
+                        
+                        // ردیف چک‌باکس‌های انتخاب نوع تست‌ها
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isTcpPingChecked, onCheckedChange = { isTcpPingChecked = it; sharedPrefs.edit().putBoolean("test_chk_tcp", it).apply() })
+                                Text("تست TCP Ping (تأخیر خام)", color = Color.White, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isJitterChecked, onCheckedChange = { isJitterChecked = it; sharedPrefs.edit().putBoolean("test_chk_jitter", it).apply() })
+                                Text("تست جیتر (Jitter)", color = Color.White, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isRealDelayChecked, onCheckedChange = { isRealDelayChecked = it; sharedPrefs.edit().putBoolean("test_chk_real_delay", it).apply() })
+                                Text("تست تاخیر واقعی (HTTP Real Delay)", color = Color.White, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isWebsiteReachChecked, onCheckedChange = { isWebsiteReachChecked = it; sharedPrefs.edit().putBoolean("test_chk_websites", it).apply() })
+                                Text("تست دسترسی به وب‌سایت‌ها", color = Color.White, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isDownloadSpeedChecked, onCheckedChange = { isDownloadSpeedChecked = it; sharedPrefs.edit().putBoolean("test_chk_download", it).apply() })
+                                Text("تست سرعت دانلود", color = Color.White, fontSize = 13.sp)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(checked = isUploadSpeedChecked, onCheckedChange = { isUploadSpeedChecked = it; sharedPrefs.edit().putBoolean("test_chk_upload", it).apply() })
+                                Text("تست سرعت آپلود", color = Color.White, fontSize = 13.sp)
+                            }
+                        }
+
+                        Divider()
+
+                        // فیلدهای آدرس تست سرعت دانلود و تاخیر واقعی سفارشی
+                        OutlinedTextField(
+                            value = speedTestUrlInput,
+                            onValueChange = { speedTestUrlInput = it; sharedPrefs.edit().putString("url_speed_test", it).apply() },
+                            label = { Text("لینک فایل تست سرعت دانلود و آپلود") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = realDelayUrlInput,
+                            onValueChange = { realDelayUrlInput = it; sharedPrefs.edit().putString("url_real_delay", it).apply() },
+                            label = { Text("لینک تست تاخیر واقعی (Real Delay)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Divider()
+
+                        // فیلدهای تایم‌اوت مجزا
+                        OutlinedTextField(
+                            value = pingTimeoutInput,
+                            onValueChange = { pingTimeoutInput = it; sharedPrefs.edit().putString("timeout_ping", it).apply() },
+                            label = { Text("زمان مهلت تست پینگ/جیتر (میلی‌ثانیه)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = realDelayTimeoutInput,
+                            onValueChange = { realDelayTimeoutInput = it; sharedPrefs.edit().putString("timeout_real_delay", it).apply() },
+                            label = { Text("زمان مهلت تست تاخیر واقعی (میلی‌ثانیه)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = speedTimeoutInput,
+                            onValueChange = { speedTimeoutInput = it; sharedPrefs.edit().putString("timeout_speed", it).apply() },
+                            label = { Text("زمان مهلت تست سرعت (میلی‌ثانیه)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        Divider()
+
+                        // پورت و تعداد همزمانی
+                        OutlinedTextField(
+                            value = socksPortInput,
+                            onValueChange = { socksPortInput = it; sharedPrefs.edit().putString("socks_port", it).apply() },
+                            label = { Text(strings.localSocksPort) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = concurrencyInput,
+                            onValueChange = { concurrencyInput = it; sharedPrefs.edit().putString("concurrency_limit", it).apply() },
+                            label = { Text("تعداد تست‌های همزمان (Concurrency)") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            // ۵. وب‌سایت‌های انتخابی و فیلد ورودی چندخطی سفارشی کاربر
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(strings.customDomains, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
+                        
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            testTargets.forEachIndexed { index, target ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            testTargets[index] = target.copy(isSelected = !target.isSelected)
+                                        }
+                                ) {
+                                    Checkbox(
+                                        checked = target.isSelected,
+                                        onCheckedChange = {
+                                            testTargets[index] = target.copy(isSelected = it)
+                                        }
+                                    )
+                                    Text(target.displayName, color = Color.White, fontSize = 14.sp)
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        OutlinedTextField(
+                            value = customWebsitesInput,
+                            onValueChange = { customWebsitesInput = it; sharedPrefs.edit().putString("custom_websites_list", it).apply() },
+                            label = { Text("وب‌سایت‌های دلخواه شما (هر خط یک آدرس)") },
+                            placeholder = { Text("مثال:\ngoogle.com\nwikipedia.org") },
+                            modifier = Modifier.fillMaxWidth(),
+                            maxLines = 8,
+                            minLines = 3
+                        )
+                    }
+                }
+            }
+
+            // ۶. پیکربندی دور زدن مسدودسازی SNI با Fragment
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -429,6 +681,7 @@ fun MainScreen() {
                 }
             }
 
+            // ۷. تنظیمات چندگانه‌سازی کانکشن‌ها (Multiplexing Mux)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -476,139 +729,128 @@ fun MainScreen() {
                 }
             }
 
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(strings.customDomains, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        
-                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            testTargets.forEachIndexed { index, target ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            testTargets[index] = target.copy(isSelected = !target.isSelected)
-                                        }
-                                ) {
-                                    Checkbox(
-                                        checked = target.isSelected,
-                                        onCheckedChange = {
-                                            testTargets[index] = target.copy(isSelected = it)
-                                        }
-                                    )
-                                    Text(target.displayName, color = Color.White, fontSize = 14.sp)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(strings.settingsTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        OutlinedTextField(
-                            value = testTimeoutInput,
-                            onValueChange = {
-                                testTimeoutInput = it
-                                sharedPrefs.edit().putString("test_timeout", it).apply()
-                            },
-                            label = { Text(strings.testTimeout) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = socksPortInput,
-                            onValueChange = {
-                                socksPortInput = it
-                                sharedPrefs.edit().putString("socks_port", it).apply()
-                            },
-                            label = { Text(strings.localSocksPort) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                }
-            }
-
+            // دکمه شروع تست ترتیبی با مهار همزمانی Semaphore
             if (configsList.isNotEmpty()) {
                 item {
                     Button(
                         onClick = {
                             isTestingNetwork = true
                             coroutineScope.launch {
-                                val timeout = testTimeoutInput.toIntOrNull() ?: 5000
+                                val pingTimeout = pingTimeoutInput.toIntOrNull() ?: 2500
+                                val realDelayTimeout = realDelayTimeoutInput.toIntOrNull() ?: 5000
+                                val speedTimeout = speedTimeoutInput.toIntOrNull() ?: 10000
                                 val socksPort = socksPortInput.toIntOrNull() ?: 20000
-                                val activeDomains = testTargets.filter { it.isSelected }.map { it.domain }
+                                val concurrencyLimit = concurrencyInput.toIntOrNull() ?: 3
 
-                                configsList.forEach { config ->
-                                    val customConfig = config.copy(
-                                        fingerprint = selectedFingerprint,
-                                        isFragmentEnabled = isFragmentEnabled,
-                                        fragmentLength = fragmentLengthInput,
-                                        fragmentInterval = fragmentIntervalInput,
-                                        isMuxEnabled = isMuxEnabled,
-                                        muxConcurrency = muxConcurrencyInput.toIntOrNull() ?: 8,
-                                        xudpConcurrency = xudpConcurrencyInput.toIntOrNull() ?: 16
-                                    )
-
-                                    val result = TestResult(customConfig)
-                                    testResults[customConfig.raw] = result
-
-                                    val tcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, timeout)
-                                    result.tcpPing = tcpPing
-
-                                    if (tcpPing > 0) {
-                                        result.jitter = XrayManager.calculateJitter(customConfig.address, customConfig.port, timeout)
-                                        
-                                        val xrayConfigFile = File(context.filesDir, "temp_config.json")
-                                        val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, socksPort)
-                                        FileOutputStream(xrayConfigFile).use { fos ->
-                                            fos.write(jsonConfigString.toByteArray())
-                                        }
-
-                                        var xrayProcess: Process? = null
-                                        try {
-                                            val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
-                                            xrayProcess = ProcessBuilder(xrayBinaryPath, "-config", xrayConfigFile.absolutePath)
-                                                .directory(context.filesDir)
-                                                .start()
-
-                                            kotlinx.coroutines.delay(500)
-                                        } catch (e: Exception) {
-                                            e.printStackTrace()
-                                        }
-
-                                        try {
-                                            result.isHealthy = true
-                                            
-                                            for (domain in activeDomains) {
-                                                val report = XrayManager.checkRealProxyDiagnostic(domain, socksPort, timeout)
-                                                result.siteReports.add(report)
-                                            }
-
-                                            result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, timeout)
-                                            result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, timeout)
-
-                                        } catch (e: Exception) {
-                                            result.isHealthy = false
-                                        } finally {
-                                            xrayProcess?.destroy()
+                                // بارگذاری همزمان دامنه‌های پیش‌فرض و سفارشی کاربر
+                                val activeDomains = mutableListOf<String>()
+                                if (isWebsiteReachChecked) {
+                                    activeDomains.addAll(testTargets.filter { it.isSelected }.map { it.domain })
+                                    customDomainsInput.split("\n").forEach {
+                                        val trimmed = it.trim()
+                                        if (cleanedText.isNotEmpty()) {
+                                            activeDomains.add(trimmed)
                                         }
                                     }
-                                    testResults[customConfig.raw] = result
                                 }
+
+                                // ایجاد محدودیت کانکشن‌های گیت‌مبنا (Semaphore)
+                                val semaphore = Semaphore(concurrencyLimit)
+
+                                val jobs = configsList.map { config ->
+                                    launch {
+                                        semaphore.withPermit {
+                                            val customConfig = config.copy(
+                                                fingerprint = selectedFingerprint,
+                                                isFragmentEnabled = isFragmentEnabled,
+                                                fragmentLength = fragmentLengthInput,
+                                                fragmentInterval = fragmentIntervalInput,
+                                                isMuxEnabled = isMuxEnabled,
+                                                muxConcurrency = muxConcurrencyInput.toIntOrNull() ?: 8,
+                                                xudpConcurrency = xudpConcurrencyInput.toIntOrNull() ?: 16
+                                            )
+
+                                            val result = TestResult(customConfig)
+                                            testResults[customConfig.raw] = result
+
+                                            // گام اول: تست پینگ و جیتر
+                                            if (isTcpPingChecked) {
+                                                val tcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, pingTimeout)
+                                                result.tcpPing = tcpPing
+                                                if (tcpPing > 0 && isJitterChecked) {
+                                                    result.Jitter = XrayManager.calculateJitter(customConfig.address, customConfig.port, pingTimeout)
+                                                }
+                                            }
+
+                                            // بررسی سلامت پایه‌ای برای ادامه زنجیره تست
+                                            val isServerReachable = if (isTcpPingChecked) result.tcpPing > 0 else true
+
+                                            if (isServerReachable) {
+                                                // ایجاد و اجرای ایمن باینری هسته
+                                                val xrayConfigFile = File(context.filesDir, "temp_config.json")
+                                                val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, socksPort)
+                                                FileOutputStream(xrayConfigFile).use { fos ->
+                                                    fos.write(jsonConfigString.toByteArray())
+                                                }
+
+                                                var xrayProcess: Process? = null
+                                                try {
+                                                    val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
+                                                    xrayProcess = ProcessBuilder(xrayBinaryPath, "-config", xrayConfigFile.absolutePath)
+                                                        .directory(context.filesDir)
+                                                        .start()
+
+                                                    kotlinx.coroutines.delay(500)
+                                                } catch (e: Exception) {
+                                                    e.printStackTrace()
+                                                }
+
+                                                try {
+                                                    // گام دوم: تاخیر واقعی HTTP از درون پروکسی SOCKS
+                                                    if (isRealDelayChecked) {
+                                                        val httpDelay = XrayManager.performRealDelay(socksPort, realDelayTimeout, realDelayUrlInput)
+                                                        result.realDelay = httpDelay
+                                                        result.isHealthy = (httpDelay > 0)
+                                                    } else {
+                                                        result.isHealthy = true
+                                                    }
+
+                                                    if (result.isHealthy) {
+                                                        // گام سوم: تست دسترسی به سایت‌ها
+                                                        if (isWebsiteReachChecked && activeDomains.isNotEmpty()) {
+                                                            for (domain in activeDomains) {
+                                                                if (domain.isNotEmpty()) {
+                                                                    val report = XrayManager.checkRealProxyDiagnostic(domain, socksPort, realDelayTimeout)
+                                                                    result.siteReports.add(report)
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // گام چهارم: تست سرعت دانلود
+                                                        if (isDownloadSpeedChecked) {
+                                                            result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
+                                                        }
+
+                                                        // گام پنجم: تست سرعت آپلود
+                                                        if (isUploadSpeedChecked) {
+                                                            result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
+                                                        }
+                                                    }
+
+                                                } catch (e: Exception) {
+                                                    result.isHealthy = false
+                                                } finally {
+                                                    xrayProcess?.destroy()
+                                                }
+                                            }
+
+                                            // محاسبه نهایی امتیاز دقیق و غیر تکراری
+                                            result.smartScore = calculatePreciseScore(result, activeDomains.size)
+                                            testResults[customConfig.raw] = result
+                                        }
+                                    }
+                                }
+                                jobs.forEach { it.join() }
                                 isTestingNetwork = false
                             }
                         },
@@ -616,43 +858,135 @@ fun MainScreen() {
                         modifier = Modifier.fillMaxWidth(),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
                     ) {
-                        // تصحیح نهایی کامپوننت چرخش مادی‌ان‌ال با قرارگیری Modifier.size مناسب جهت دور زدن خطای کامپایل
                         if (isTestingNetwork) CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White)
-                        else Text(strings.runTestsBtn, fontWeight = FontWeight.Bold)
+                        else Text(strings.runTestsBtn, fontWeight = FontWeight.Bold, color = Color.White)
                     }
                 }
 
+                // ۸. بخش صادر کردن سفارشی (کپی یا ساخت فایل متنی برای کل یا ۱۰تای برتر)
                 item {
-                    Button(
-                        onClick = {
-                            val healthyConfigs = testResults.values
-                                .filter { it.isHealthy }
-                                .map { it.config.raw }
-                                .joinToString("\n")
-
-                            if (healthyConfigs.isNotEmpty()) {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                val clip = ClipData.newPlainText("Healthy Configs", healthyConfigs)
-                                clipboard.setPrimaryClip(clip)
-                                Toast.makeText(context, strings.copySuccessMsg, Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
-                            }
-                        },
+                    Card(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
-                        Text(strings.exportHealthyBtn)
+                        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("صادر کردن خروجی کانفیگ‌ها", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
+                            
+                            OutlinedTextField(
+                                value = exportLimitInput,
+                                onValueChange = { exportLimitInput = it },
+                                label = { Text("تعداد خروجی برترین‌ها (N)") },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            Divider()
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val healthyList = testResults.values
+                                            .filter { it.isHealthy }
+                                            .sortedByDescending { it.smartScore }
+                                            .map { it.config.raw }
+                                        
+                                        if (healthyList.isNotEmpty()) {
+                                            val text = healthyList.joinToString("\n")
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("All Healthy", text))
+                                            Toast.makeText(context, "کل کانفیگ‌های سالم کپی شدند!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("کپی کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val limit = exportLimitInput.toIntOrNull() ?: 10
+                                        val topList = testResults.values
+                                            .filter { it.isHealthy }
+                                            .sortedByDescending { it.smartScore }
+                                            .take(limit)
+                                            .map { it.config.raw }
+
+                                        if (topList.isNotEmpty()) {
+                                            val text = topList.joinToString("\n")
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Top N Healthy", text))
+                                            Toast.makeText(context, "$limit کانفیگ برتر کپی شدند!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("کپی $exportLimitInputتای برتر", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                }
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val healthyList = testResults.values
+                                            .filter { it.isHealthy }
+                                            .sortedByDescending { it.smartScore }
+                                            .map { it.config.raw }
+
+                                        if (healthyList.isNotEmpty()) {
+                                            fileContentToExport = healthyList.joinToString("\n")
+                                            fileExportLauncher.launch("healthy_configs.txt")
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("ذخیره فایل کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val limit = exportLimitInput.toIntOrNull() ?: 10
+                                        val topList = testResults.values
+                                            .filter { it.isHealthy }
+                                            .sortedByDescending { it.smartScore }
+                                            .take(limit)
+                                            .map { it.config.raw }
+
+                                        if (topList.isNotEmpty()) {
+                                            fileContentToExport = topList.joinToString("\n")
+                                            fileExportLauncher.launch("top_${limit}_healthy.txt")
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("ذخیره فایل $exportLimitInputتای برتر", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                }
+                            }
+                        }
                     }
                 }
             }
 
+            // گزارش لایو نتایج به کاربر به صورت نزولی بر اساس امتیاز هوشمند فوق دقیق
             if (testResults.isNotEmpty()) {
                 item {
                     Text(strings.testResultsTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
                 }
 
-                items(testResults.values.toList()) { result ->
+                // مرتب‌سازی نتایج بر حسب امتیاز هوشمند دقیق به صورت نزولی
+                val sortedResults = testResults.values.toList().sortedByDescending { it.smartScore }
+
+                items(sortedResults) { result ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(
@@ -660,24 +994,49 @@ fun MainScreen() {
                         )
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
-                            Text(
-                                text = "[${result.config.protocol.uppercase()}] ${result.config.remarks}",
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                fontSize = 14.sp
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "[${result.config.protocol.uppercase()}] ${result.config.remarks}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    fontSize = 14.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                // نمایش امتیاز دقیق اعشاری کانفیگ
+                                Text(
+                                    text = "Score: ${String.format("%.4f", result.smartScore)}",
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    fontSize = 13.sp
+                                )
+                            }
                             Spacer(modifier = Modifier.height(6.dp))
                             
-                            Text("${strings.tcpPingLabel}: ${if (result.tcpPing > 0) "${result.tcpPing} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
+                            if (isTcpPingChecked) {
+                                Text("${strings.tcpPingLabel}: ${if (result.tcpPing > 0) "${result.tcpPing} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
+                            }
                             
                             if (result.tcpPing > 0) {
-                                Text("${strings.jitterLabel}: ${if (result.jitter >= 0) "${String.format("%.2f", result.jitter)} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
+                                if (isJitterChecked) {
+                                    Text("${strings.jitterLabel}: ${if (result.Jitter >= 0) "${String.format("%.2f", result.Jitter)} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
+                                }
+                                if (isRealDelayChecked) {
+                                    Text("${strings.realDelayLabel}: ${if (result.realDelay > 0) "${result.realDelay} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
+                                }
                                 
                                 if (result.isHealthy) {
-                                    Text("${strings.downloadSpeedLabel}: ${if (result.downloadSpeedMbps >= 0) "${String.format("%.2f", result.downloadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
-                                    Text("${strings.uploadSpeedLabel}: ${if (result.uploadSpeedMbps >= 0) "${String.format("%.2f", result.uploadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
+                                    if (isDownloadSpeedChecked) {
+                                        Text("${strings.downloadSpeedLabel}: ${if (result.downloadSpeedMbps >= 0) "${String.format("%.2f", result.downloadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
+                                    }
+                                    if (isUploadSpeedChecked) {
+                                        Text("${strings.uploadSpeedLabel}: ${if (result.uploadSpeedMbps >= 0) "${String.format("%.2f", result.uploadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
+                                    }
                                     
-                                    if (result.siteReports.isNotEmpty()) {
+                                    if (isWebsiteReachChecked && result.siteReports.isNotEmpty()) {
                                         Spacer(modifier = Modifier.height(8.dp))
                                         Text("${strings.websiteCheckLabel}:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
                                         result.siteReports.forEach { report ->
