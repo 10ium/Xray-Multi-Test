@@ -22,15 +22,18 @@ jobs:
         with:
           java-version: '17'
           distribution: 'zulu'
-          cache: 'gradle'
 
-      - name: Grant Execute Permission to Gradlew
-        run: chmod +x gradlew
+      # استفاده از اکشن رسمی گریدل جهت نصب مستقل و کش هوشمند گریدل
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.5' # نسخه پایدار و هماهنگ با پروژه اندروید
 
+      # فرآیند کامپایل ترافیکی با استفاده از دستور سیستم gradle به جای اسکریپت محلی
       - name: Build with Gradle
-        run: ./gradlew assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
+        run: gradle assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
 
-      # در صورتی که فایل Keystore برای امضای ریلیز تنظیم نشده باشد، گریدل به طور خودکار از کلید تست/دیباگ استفاده می‌کند تا بیلد با موفقیت انجام شود.
+      # امضای ریلیز با کلید در صورت تعریف گیت‌هاب سکرتز
       - name: Sign Release APK
         if: env.HAS_KEYSTORE == 'true'
         env:
@@ -41,7 +44,6 @@ jobs:
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           echo "$SIGNING_KEY" | base64 -d > app/release.keystore
-          # در صورتی که اسرار گیت‌هاب ست شده باشند، این بخش فایل Keystore را بازسازی می‌کند.
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
