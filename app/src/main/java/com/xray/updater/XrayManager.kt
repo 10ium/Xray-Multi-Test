@@ -220,7 +220,7 @@ object XrayManager {
         return@withContext false
     }
 
-    // متد پارس و تصفیه هوشمند منطبق با الگوهای نوین، دکودر بیس۶۴ و فیلتر کاراکترهای مخدوش [9, 14]
+    // پارسر هوشمند با پشتیبانی کامل از متن‌های مخدوش به همراه دکود بیس۶۴ [9, 14]
     fun parseConfigsFromMessyText(rawText: String): List<XrayConfig> {
         val cleanedText = rawText.replace(CONTROL_CHARS_REGEX, "").trim()
         val configs = mutableListOf<XrayConfig>()
@@ -236,7 +236,7 @@ object XrayManager {
                         targetText = decodedStr
                     }
                 } catch (e: Exception) {
-                    // نادیده گرفتن استثنای بیس۶۴ و ارجاع به بدنه متنی اصلی
+                    // در صورت خطای بیس۶۴ فرآیند تصفیه متن اصلی ادامه می‌یابد
                 }
             }
         }
@@ -462,7 +462,7 @@ object XrayManager {
         return configs
     }
 
-    // تولید فایل پیکربندی هسته به صورت ۱۰۰٪ منطبق با سناریوهای پورت‌مپ، مالتی‌یوزر، وایرگارد، هیستریا و تکنولوژی نوین XHTTP
+    // متد اصلاح‌شده تولید خودکار و پویا ساختار فایل پیکربندی به روش تخصیص بدون لامبدا جهت رفع کامل ارور Unresolved Reference
     fun generateXrayJsonConfig(config: XrayConfig, socksPort: Int): String {
         val outJson = JSONObject().apply {
             put("protocol", when(config.protocol) {
@@ -574,7 +574,6 @@ object XrayManager {
             // لایه انتقال و امنیت (StreamSettings)
             val streamSettings = JSONObject()
             
-            // تخصیص شبکه ترافیک بر اساس مستندات (raw, xhttp, mkcp, grpc, websocket, httpupgrade, hysteria)
             val networkType = when (config.protocol) {
                 "xhttp" -> "xhttp"
                 "wireguard", "wg" -> "raw"
@@ -587,7 +586,6 @@ object XrayManager {
             }
             streamSettings.put("network", networkType)
 
-            // بررسی و ایجاد رکوردهای انحصاری ترنسپورت‌ها
             when (networkType) {
                 "xhttp" -> {
                     val xhttpSettings = JSONObject().apply {
@@ -635,7 +633,6 @@ object XrayManager {
                 }
             }
 
-            // لایه امنیتی (Reality / TLS)
             if (config.security.isNotEmpty()) {
                 streamSettings.put("security", config.security)
                 
@@ -663,48 +660,48 @@ object XrayManager {
                 }
             }
 
-            // لایه فرستنده و مسیریابی سوکت محلی (Sockopt / Happy Eyeballs / Fragment Slicing)
-            val sockopt = JSONObject().apply {
-                if (config.isHappyEyeballsEnabled) {
-                    sockopt.put("domainStrategy", "ForceIP")
-                    val happyEyeballs = JSONObject().apply {
-                        put("tryDelayMs", config.happyEyeballsDelay)
-                        put("prioritizeIPv6", false)
-                        put("interleave", 1)
-                        put("maxConcurrentTry", 4)
-                    }
-                    put("happyEyeballs", happyEyeballs)
-                }
+            // لایه فرستنده و مسیریابی سوکت محلی اصلاح شده جهت رفع قطعی باگ Unresolved Reference
+            val sockopt = JSONObject()
+            if (config.isHappyEyeballsEnabled) {
+                sockopt.put("domainStrategy", "ForceIP")
+                val happyEyeballs = JSONObject()
+                happyEyeballs.put("tryDelayMs", config.happyEyeballsDelay)
+                happyEyeballs.put("prioritizeIPv6", false)
+                happyEyeballs.put("interleave", 1)
+                happyEyeballs.put("maxConcurrentTry", 4)
+                sockopt.put("happyEyeballs", happyEyeballs)
             }
             
-            // پیاده‌سازی تکنولوژی نوین فرگمنت (Fragment) تحت عنوان لایه‌گذاری فینال‌ماسک ترافیکی
+            // پیاده‌سازی اصلاح‌شده فرگمنت (Fragment) تحت عنوان لایه‌گذاری فینال‌ماسک ترافیکی
             val finalmask = JSONObject()
             if (config.isFragmentEnabled) {
-                val tcpArray = JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("type", "fragment")
-                        put("settings", JSONObject().apply {
-                            put("packets", "tlshello")
-                            put("length", config.fragmentLength)
-                            put("delay", config.fragmentInterval)
-                            put("maxSplit", "3-6")
-                        })
-                    })
-                }
+                val tcpArray = JSONArray()
+                val fragmentObj = JSONObject()
+                fragmentObj.put("type", "fragment")
+                
+                val fragmentSettingsObj = JSONObject()
+                fragmentSettingsObj.put("packets", "tlshello")
+                fragmentSettingsObj.put("length", config.fragmentLength)
+                fragmentSettingsObj.put("delay", config.fragmentInterval)
+                fragmentSettingsObj.put("maxSplit", "3-6")
+                
+                fragmentObj.put("settings", fragmentSettingsObj)
+                tcpArray.put(fragmentObj)
                 finalmask.put("tcp", tcpArray)
             }
 
-            // افزودن پارامترهای جهش پورت (UDP Port Hopping) و تنظیمات Brutal برای هیستریا و XHTTP H3
+            // ادغام پارامترهای جهش پورت (UDP Port Hopping) و تنظیمات Brutal برای هیستریا و XHTTP H3
             if (config.hyUdpHop.isNotEmpty() && (config.protocol.contains("hysteria") || config.protocol == "xhttp")) {
-                val quicParams = JSONObject().apply {
-                    put("congestion", "force-brutal")
-                    put("brutalUp", config.hyUp.ifEmpty { "20 mbps" })
-                    put("brutalDown", config.hyDown.ifEmpty { "100 mbps" })
-                    put("udpHop", JSONObject().apply {
-                        put("ports", config.hyUdpHop)
-                        put("interval", 15)
-                    })
-                }
+                val quicParams = JSONObject()
+                quicParams.put("congestion", "force-brutal")
+                quicParams.put("brutalUp", config.hyUp.ifEmpty { "20 mbps" })
+                quicParams.put("brutalDown", config.hyDown.ifEmpty { "100 mbps" })
+                
+                val udpHop = JSONObject()
+                udpHop.put("ports", config.hyUdpHop)
+                udpHop.put("interval", 15)
+                
+                quicParams.put("udpHop", udpHop)
                 finalmask.put("quicParams", quicParams)
             }
 
