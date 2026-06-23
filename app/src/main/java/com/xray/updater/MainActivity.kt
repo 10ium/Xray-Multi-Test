@@ -3,7 +3,6 @@ package com.xray.updater
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -12,6 +11,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,7 +32,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.net.InetSocketAddress
+import java.net.Proxy
+import java.net.Socket
 import java.util.regex.Pattern
 
 class MainActivity : ComponentActivity() {
@@ -59,40 +65,56 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+data class TestTarget(
+    val domain: String,
+    val displayName: String,
+    var isSelected: Boolean = true
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen() {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // متغیرهای وضعیت بومی‌سازی و نسخه برنامه [1]
     val lang = Localization.currentLanguage
     val strings = Localization.strings
     val appVersionName = BuildConfig.APP_VERSION
 
-    // تنظیمات ذخیره‌شده محلی
     val sharedPrefs = remember { context.getSharedPreferences("XrayPrefs", Context.MODE_PRIVATE) }
     var localCoreVersion by remember { mutableStateOf(sharedPrefs.getString("core_version", strings.unknown) ?: strings.unknown) }
     var latestCoreVersion by remember { mutableStateOf(strings.unknown) }
 
-    // فیلدهای شخصی‌سازی تنظیمات تست سرعت و سایت‌ها
     var testTimeoutInput by remember { mutableStateOf(sharedPrefs.getString("test_timeout", "5000") ?: "5000") }
-    var socksPortInput by remember { mutableStateOf(sharedPrefs.getString("socks_port", "10808") ?: "10808") }
-    var customDomainsInput by remember { mutableStateOf(sharedPrefs.getString("custom_domains", "google.com, wikipedia.org") ?: "google.com, wikipedia.org") }
+    var socksPortInput by remember { mutableStateOf(sharedPrefs.getString("socks_port", "20000") ?: "20000") }
 
-    // فیلدهای لینک اشتراک و فایل‌های متنی
+    // ۱۱ وب‌سایت پیش‌فرض فیلتر یا تحریم درخواستی شما
+    val testTargets = remember {
+        mutableStateListOf(
+            TestTarget("telegram.org", "Telegram"),
+            TestTarget("instagram.com", "Instagram"),
+            TestTarget("youtube.com", "YouTube"),
+            TestTarget("tiktok.com", "TikTok"),
+            TestTarget("x.com", "X (Twitter)"),
+            TestTarget("gemini.google.com", "Gemini"),
+            TestTarget("chatgpt.com", "ChatGPT"),
+            TestTarget("claude.ai", "Claude"),
+            TestTarget("grok.com", "Grok"),
+            TestTarget("store.steampowered.com", "Steam"),
+            TestTarget("epicgames.com", "Epic Games")
+        )
+    }
+
     var subUrlInput by remember { mutableStateOf("") }
     var configsList by remember { mutableStateOf<List<XrayConfig>>(emptyList()) }
     val testResults = remember { mutableStateMapOf<String, TestResult>() }
 
-    // وضعیت‌های لودینگ و پیشرفت فرآیندها
     var isCheckingCore by remember { mutableStateOf(false) }
     var isDownloadingCore by remember { mutableStateOf(false) }
     var coreProgress by remember { mutableStateOf(0f) }
     var coreProgressText by remember { mutableStateOf("") }
     var isTestingNetwork by remember { mutableStateOf(false) }
 
-    // ابزار بومی تبدیل آدرس گیت‌هاب به لینک خام (Raw) به صورت امن
     fun parseGithubUrl(url: String): String {
         val githubBlobPattern = Pattern.compile("https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)")
         val matcher = githubBlobPattern.matcher(url.trim())
@@ -106,13 +128,11 @@ fun MainScreen() {
         return url.trim()
     }
 
-    // دکودر هوشمند فرمت‌های رمزنگاری شده Base64 با فیلترینگ کاراکترهای مخدوش [14]
     fun decodeIfBase64(text: String): String {
         val cleanText = text.trim()
         if (cleanText.isEmpty()) return ""
         if (cleanText.contains("://")) return cleanText
         
-        // پاکسازی کاراکترهای مخدوش غیر بیس۶۴ [14]
         val b64Chars = cleanText.replace(Regex("[^a-zA-Z0-9+/=_-]"), "")
         if (b64Chars.length < 10) return cleanText
 
@@ -129,7 +149,6 @@ fun MainScreen() {
         }
     }
 
-    // بازخوانی فایل متنی با ContentResolver
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -140,7 +159,7 @@ fun MainScreen() {
                         BufferedReader(InputStreamReader(inputStream)).use { reader ->
                             val content = reader.readText()
                             val decodedContent = decodeIfBase64(content)
-                            val parsed = XrayManager.parseConfigs(decodedContent)
+                            val parsed = XrayManager.parseConfigsFromMessyText(decodedContent)
                             withContext(Dispatchers.Main) {
                                 configsList = parsed
                                 testResults.clear()
@@ -180,7 +199,7 @@ fun MainScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // ۱. هدر اطلاعات نسخه و بیلد برنامه [1]
+            // هدر نسخه اپ و هسته
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -248,7 +267,7 @@ fun MainScreen() {
                 }
             }
 
-            // ۲. ورود کانفیگ‌ها
+            // بخش افزودن کانفیگ‌ها
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -258,7 +277,6 @@ fun MainScreen() {
                         Text(strings.selectConfigTitle, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // متد کلیپ بورد
                         Button(
                             onClick = {
                                 val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -266,7 +284,7 @@ fun MainScreen() {
                                 if (clipData != null && clipData.itemCount > 0) {
                                     val text = clipData.getItemAt(0).text.toString()
                                     val decoded = decodeIfBase64(text)
-                                    val parsed = XrayManager.parseConfigs(decoded)
+                                    val parsed = XrayManager.parseConfigsFromMessyText(decoded)
                                     configsList = parsed
                                     testResults.clear()
                                     Toast.makeText(context, "${parsed.size} کانفیگ با موفقیت دریافت شد", Toast.LENGTH_SHORT).show()
@@ -279,7 +297,6 @@ fun MainScreen() {
 
                         Spacer(modifier = Modifier.height(8.dp))
 
-                        // متد فایل متنی
                         Button(
                             onClick = { filePickerLauncher.launch("text/*") },
                             modifier = Modifier.fillMaxWidth()
@@ -291,7 +308,6 @@ fun MainScreen() {
                         Divider()
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // متد لینک اشتراک (با تحلیل پویای گیت‌هاب و دکود بیس۶۴) [9]
                         OutlinedTextField(
                             value = subUrlInput,
                             onValueChange = { subUrlInput = it },
@@ -320,7 +336,41 @@ fun MainScreen() {
                 }
             }
 
-            // ۳. تنظیمات شخصی‌سازی عمیق تست
+            // چک‌باکس مدیریت وب‌سایت‌های تحت تست سرعت و فیلترینگ
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(strings.customDomains, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = MaterialTheme.colorScheme.secondary)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            testTargets.forEachIndexed { index, target ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            testTargets[index] = target.copy(isSelected = !target.isSelected)
+                                        }
+                                ) {
+                                    Checkbox(
+                                        checked = target.isSelected,
+                                        onCheckedChange = {
+                                            testTargets[index] = target.copy(isSelected = it)
+                                        }
+                                    )
+                                    Text(target.displayName, color = Color.White, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // تنظیمات ثانویه پورت‌ها
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -350,22 +400,11 @@ fun MainScreen() {
                             label = { Text(strings.localSocksPort) },
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        OutlinedTextField(
-                            value = customDomainsInput,
-                            onValueChange = {
-                                customDomainsInput = it
-                                sharedPrefs.edit().putString("custom_domains", it).apply()
-                            },
-                            label = { Text(strings.customDomains) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
                     }
                 }
             }
 
-            // ۴. عملیات تست همزمان
+            // اجرای فرآیند ارزیابی
             if (configsList.isNotEmpty()) {
                 item {
                     Button(
@@ -373,39 +412,63 @@ fun MainScreen() {
                             isTestingNetwork = true
                             coroutineScope.launch {
                                 val timeout = testTimeoutInput.toIntOrNull() ?: 5000
-                                val domains = customDomainsInput.split(",").map { it.trim() }
+                                val socksPort = socksPortInput.toIntOrNull() ?: 20000
+                                val activeDomains = testTargets.filter { it.isSelected }.map { it.domain }
 
                                 configsList.forEach { config ->
                                     val result = TestResult(config)
                                     testResults[config.raw] = result
 
-                                    // ۱. تست تأخیر پینگ خام TCP
-                                    val ping = XrayManager.performTcpPing(config.address, config.port, timeout)
-                                    result.tcpPing = ping
+                                    // لایه اول: پینگ TCP اولیه برای صحت اتصال سرور
+                                    val tcpPing = XrayManager.performTcpPing(config.address, config.port, timeout)
+                                    result.tcpPing = tcpPing
 
-                                    if (ping > 0) {
-                                        // ۲. تست نوسان تأخیر (Jitter)
+                                    if (tcpPing > 0) {
                                         result.jitter = XrayManager.calculateJitter(config.address, config.port, timeout)
                                         
-                                        // ۳. تست شبیه‌ساز اتصال واقعی سرور پروکسی با Cloudflare
-                                        val httpDelay = XrayManager.performRealDelay(timeout)
-                                        result.realDelay = httpDelay
+                                        // تولید و ذخیره موقت فایل پیکربندی هسته Xray بر اساس مستندات ارائه شده
+                                        val xrayConfigFile = File(context.filesDir, "temp_config.json")
+                                        val jsonConfigString = XrayManager.generateXrayJsonConfig(config, socksPort)
+                                        FileOutputStream(xrayConfigFile).use { fos ->
+                                            fos.write(jsonConfigString.toByteArray())
+                                        }
 
-                                        if (httpDelay > 0) {
+                                        // تلاش برای اجرای پروسس هسته Xray به همراه لایف‌سایکل اختصاصی
+                                        var xrayProcess: Process? = null
+                                        try {
+                                            val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
+                                            xrayProcess = ProcessBuilder(xrayBinaryPath, "-config", xrayConfigFile.absolutePath)
+                                                .directory(context.filesDir)
+                                                .start()
+
+                                            // وقفه کوتاه جهت لود موفق هسته و شنود پورت SOCKS
+                                            kotlinx.coroutines.delay(500)
+                                        } catch (e: Exception) {
+                                            e.printStackTrace()
+                                        }
+
+                                        // لایه دوم: ارزیابی سرعت و دامنه‌ها از درون تونل هسته Xray
+                                        try {
                                             result.isHealthy = true
                                             
-                                            // ۴. تست سرعت دانلود
-                                            result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(timeout) {}
-                                            
-                                            // ۵. تست سرعت آپلود
-                                            result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(timeout)
-                                            
-                                            // ۶. بررسی دسترسی دقیق سایت‌های دلخواه کاربر
-                                            val reachability = XrayManager.checkWebsiteReachability(domains, timeout)
-                                            result.websiteReachability.putAll(reachability)
+                                            // بررسی تفکیک شده وضعیت تک‌تک وب‌سایت‌ها از درون پروکسی
+                                            for (domain in activeDomains) {
+                                                val report = XrayManager.checkRealProxyDiagnostic(domain, socksPort, timeout)
+                                                result.siteReports.add(report)
+                                            }
+
+                                            // بنچمارک سرعت واقعی بر بستر HTTP کلادفلر
+                                            result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, timeout)
+                                            result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, timeout)
+
+                                        } catch (e: Exception) {
+                                            result.isHealthy = false
+                                        } finally {
+                                            // حذف فایل پیکربندی موقت و بستن پروسس برای جلوگیری از نشت حافظه
+                                            xrayProcess?.destroy()
                                         }
                                     }
-                                    testResults[config.raw] = result // به روزرسانی مجدد استیت جت‌پک کامپوز
+                                    testResults[config.raw] = result
                                 }
                                 isTestingNetwork = false
                             }
@@ -419,35 +482,33 @@ fun MainScreen() {
                     }
                 }
 
-                // دکمه خروجی سالم‌ها به صورت تجمیع شده
+                // صادر کردن کانفیگ‌های سالم فیلتر نشده به کلیپ‌بورد
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = {
-                                val healthyConfigs = testResults.values
-                                    .filter { it.isHealthy }
-                                    .map { it.config.raw }
-                                    .joinToString("\n")
+                    Button(
+                        onClick = {
+                            val healthyConfigs = testResults.values
+                                .filter { it.isHealthy }
+                                .map { it.config.raw }
+                                .joinToString("\n")
 
-                                if (healthyConfigs.isNotEmpty()) {
-                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                    val clip = ClipData.newPlainText("Healthy Configs", healthyConfigs)
-                                    clipboard.setPrimaryClip(clip)
-                                    Toast.makeText(context, strings.copySuccessMsg, Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text(strings.exportHealthyBtn, fontSize = 12.sp)
-                        }
+                            if (healthyConfigs.isNotEmpty()) {
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                val clip = ClipData.newPlainText("Healthy Configs", healthyConfigs)
+                                clipboard.setPrimaryClip(clip)
+                                Toast.makeText(context, strings.copySuccessMsg, Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text(strings.exportHealthyBtn)
                     }
                 }
             }
 
-            // نمایش نتایج تست‌ها
+            // لیست تبلور یافته نتایج
             if (testResults.isNotEmpty()) {
                 item {
                     Text(strings.testResultsTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
@@ -473,17 +534,43 @@ fun MainScreen() {
                             
                             if (result.tcpPing > 0) {
                                 Text("${strings.jitterLabel}: ${if (result.jitter >= 0) "${String.format("%.2f", result.jitter)} ms" else strings.statusFailed}", fontSize = 12.sp, color = Color.LightGray)
-                                Text("${strings.realDelayLabel}: ${if (result.realDelay > 0) "${result.realDelay} ms" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
                                 
                                 if (result.isHealthy) {
                                     Text("${strings.downloadSpeedLabel}: ${if (result.downloadSpeedMbps >= 0) "${String.format("%.2f", result.downloadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
                                     Text("${strings.uploadSpeedLabel}: ${if (result.uploadSpeedMbps >= 0) "${String.format("%.2f", result.uploadSpeedMbps)} Mbps" else strings.statusChecking}", fontSize = 12.sp, color = Color.LightGray)
                                     
-                                    if (result.websiteReachability.isNotEmpty()) {
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text("${strings.websiteCheckLabel}:", fontWeight = FontWeight.Bold, fontSize = 11.sp, color = Color.White)
-                                        result.websiteReachability.forEach { (web, ok) ->
-                                            Text(" - $web: ${if (ok) "✅" else "❌"}", fontSize = 11.sp, color = if (ok) Color.Green else Color.Red)
+                                    if (result.siteReports.isNotEmpty()) {
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text("${strings.websiteCheckLabel}:", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = Color.White)
+                                        result.siteReports.forEach { report ->
+                                            val badgeColor = when (report.status) {
+                                                SiteStatus.SAFE -> Color.Green
+                                                SiteStatus.SANCTIONED -> Color(0xFFFF9800) // نارنجی تحریم
+                                                SiteStatus.POISONED -> Color.Red // فیلترینگ شدید دی‌ان‌اس
+                                                SiteStatus.FAILED -> Color.Gray
+                                            }
+                                            
+                                            val statusText = when (report.status) {
+                                                SiteStatus.SAFE -> "Safe (آزاد)"
+                                                SiteStatus.SANCTIONED -> "Sanctioned (تحریم)"
+                                                SiteStatus.POISONED -> "Poisoned (مسموم/فیلتر)"
+                                                SiteStatus.FAILED -> "Failed (قطع)"
+                                            }
+
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(vertical = 2.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween
+                                            ) {
+                                                Text("• ${report.domain}", fontSize = 11.sp, color = Color.LightGray)
+                                                Text(
+                                                    text = "$statusText | ${report.rttMs} ms",
+                                                    fontSize = 11.sp,
+                                                    color = badgeColor,
+                                                    fontWeight = FontWeight.Bold
+                                                )
+                                            }
                                         }
                                     }
                                 }
