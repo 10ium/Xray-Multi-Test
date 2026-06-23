@@ -51,7 +51,8 @@ android {
         buildConfig = true
     }
     composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1"
+        // ارتقا به نسخه 1.5.10 جهت انطباق کامل و بدون ارور با کاتلین نسخه 1.9.22 طبق مستندات رسمی گوگل
+        kotlinCompilerExtensionVersion = "1.5.10"
     }
     packaging {
         resources {
