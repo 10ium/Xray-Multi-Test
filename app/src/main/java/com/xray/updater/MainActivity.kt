@@ -213,14 +213,12 @@ fun MainScreen() {
     fun calculatePreciseScore(res: TestResult, totalSites: Int): Double {
         if (res.tcpPing <= 0) return 0.0
 
-        // ۱. امتیاز پینگ خام TCP (تا سقف ۲۵ امتیاز)
         val pingScore = when {
             res.tcpPing <= 20 -> 25.0
             res.tcpPing >= 1500 -> 0.0
             else -> 25.0 * (1.0 - (res.tcpPing - 20) / 1480.0)
         }
 
-        // ۲. امتیاز جیتر نوسان پینگ (تا سقف ۱۵ امتیاز)
         val jitterScore = when {
             res.Jitter <= 0.0 -> 0.0
             res.Jitter <= 1.0 -> 15.0
@@ -228,7 +226,6 @@ fun MainScreen() {
             else -> 15.0 * (1.0 - (res.Jitter - 1.0) / 149.0)
         }
 
-        // ۳. امتیاز تأخیر واقعی پورت SOCKS پروکسی (تا سقف ۲۵ امتیاز)
         val realDelayScore = when {
             res.realDelay <= 0 -> 0.0
             res.realDelay <= 100 -> 25.0
@@ -236,21 +233,18 @@ fun MainScreen() {
             else -> 25.0 * (1.0 - (res.realDelay - 100) / 2400.0)
         }
 
-        // ۴. امتیاز سرعت دانلود (تا سقف ۱۵ امتیاز - سقف ۱۰۰ مگابیت بر ثانیه)
         val downloadScore = when {
             res.downloadSpeedMbps <= 0.0 -> 0.0
             res.downloadSpeedMbps >= 100.0 -> 15.0
             else -> 15.0 * (res.downloadSpeedMbps / 100.0)
         }
 
-        // ۵. امتیاز سرعت آپلود (تا سقف ۱۰ امتیاز - سقف ۵۰ مگابیت بر ثانیه)
         val uploadScore = when {
             res.uploadSpeedMbps <= 0.0 -> 0.0
             res.uploadSpeedMbps >= 50.0 -> 10.0
             else -> 10.0 * (res.uploadSpeedMbps / 50.0)
         }
 
-        // ۶. امتیاز دسترسی به وب‌سایت‌های فیلتر/تحریم (تا سقف ۱۰ امتیاز)
         val successfulSites = res.siteReports.count { it.status == SiteStatus.SAFE }
         val websiteScore = if (totalSites > 0) {
             10.0 * (successfulSites.toDouble() / totalSites.toDouble())
@@ -258,7 +252,6 @@ fun MainScreen() {
             10.0
         }
 
-        // ضریب ریزسنجی انحصاری میلی‌ثانیه‌ای (Micro-metric) جهت متمایز کردن کامل رتبه کانفیگ‌ها
         val microMetric = (res.tcpPing % 100).toDouble() / 10000.0 + (res.realDelay % 100).toDouble() / 100000.0
 
         val total = pingScore + jitterScore + realDelayScore + downloadScore + uploadScore + websiteScore + microMetric
@@ -537,7 +530,7 @@ fun MainScreen() {
                         OutlinedTextField(
                             value = speedTestUrlInput,
                             onValueChange = { speedTestUrlInput = it; sharedPrefs.edit().putString("url_speed_test", it).apply() },
-                            label = { Text("لینک فایل تست سرعت دانلود و آپلود") },
+                            label = { Text("لینک فایل تست سرعت دانلود") },
                             modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
@@ -588,7 +581,7 @@ fun MainScreen() {
                 }
             }
 
-            // ۵. وب‌سایت‌های انتخابی و فیلد ورودی چندخطی سفارشی کاربر
+            // ۵. وب‌سایت‌های انتخابی و فیلد ورودی چندخطی سفارشی کاربر (با اصلاح قطعی تداخل نام متغیرها و trimmed)
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -742,19 +735,17 @@ fun MainScreen() {
                                 val socksPort = socksPortInput.toIntOrNull() ?: 20000
                                 val concurrencyLimit = concurrencyInput.toIntOrNull() ?: 3
 
-                                // بارگذاری همزمان دامنه‌های پیش‌فرض و سفارشی کاربر
                                 val activeDomains = mutableListOf<String>()
                                 if (isWebsiteReachChecked) {
                                     activeDomains.addAll(testTargets.filter { it.isSelected }.map { it.domain })
-                                    customDomainsInput.split("\n").forEach {
+                                    customWebsitesInput.split("\n").forEach {
                                         val trimmed = it.trim()
-                                        if (cleanedText.isNotEmpty()) {
+                                        if (trimmed.isNotEmpty()) {
                                             activeDomains.add(trimmed)
                                         }
                                     }
                                 }
 
-                                // ایجاد محدودیت کانکشن‌های گیت‌مبنا (Semaphore)
                                 val semaphore = Semaphore(concurrencyLimit)
 
                                 val jobs = configsList.map { config ->
@@ -773,7 +764,7 @@ fun MainScreen() {
                                             val result = TestResult(customConfig)
                                             testResults[customConfig.raw] = result
 
-                                            // گام اول: تست پینگ و جیتر
+                                            // تست ۱: TCP Ping و Jitter
                                             if (isTcpPingChecked) {
                                                 val tcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, pingTimeout)
                                                 result.tcpPing = tcpPing
@@ -782,11 +773,9 @@ fun MainScreen() {
                                                 }
                                             }
 
-                                            // بررسی سلامت پایه‌ای برای ادامه زنجیره تست
                                             val isServerReachable = if (isTcpPingChecked) result.tcpPing > 0 else true
 
                                             if (isServerReachable) {
-                                                // ایجاد و اجرای ایمن باینری هسته
                                                 val xrayConfigFile = File(context.filesDir, "temp_config.json")
                                                 val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, socksPort)
                                                 FileOutputStream(xrayConfigFile).use { fos ->
@@ -806,7 +795,7 @@ fun MainScreen() {
                                                 }
 
                                                 try {
-                                                    // گام دوم: تاخیر واقعی HTTP از درون پروکسی SOCKS
+                                                    // تست ۲: تاخیر واقعی HTTP از درون پروکسی SOCKS (اتصال به سرور) [11]
                                                     if (isRealDelayChecked) {
                                                         val httpDelay = XrayManager.performRealDelay(socksPort, realDelayTimeout, realDelayUrlInput)
                                                         result.realDelay = httpDelay
@@ -815,8 +804,9 @@ fun MainScreen() {
                                                         result.isHealthy = true
                                                     }
 
+                                                    // بررسی دسترسی سایت‌ها (فقط در صورتی که اتصال اول به سرور با موفقیت تایید شود) [11]
                                                     if (result.isHealthy) {
-                                                        // گام سوم: تست دسترسی به سایت‌ها
+                                                        // تست ۳: تست دسترسی به سایت‌ها از مسیر تونل
                                                         if (isWebsiteReachChecked && activeDomains.isNotEmpty()) {
                                                             for (domain in activeDomains) {
                                                                 if (domain.isNotEmpty()) {
@@ -826,12 +816,12 @@ fun MainScreen() {
                                                             }
                                                         }
 
-                                                        // گام چهارم: تست سرعت دانلود
+                                                        // تست ۴: تست سرعت دانلود
                                                         if (isDownloadSpeedChecked) {
                                                             result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
                                                         }
 
-                                                        // گام پنجم: تست سرعت آپلود
+                                                        // تست ۵: تست سرعت آپلود
                                                         if (isUploadSpeedChecked) {
                                                             result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
                                                         }
@@ -844,7 +834,6 @@ fun MainScreen() {
                                                 }
                                             }
 
-                                            // محاسبه نهایی امتیاز دقیق و غیر تکراری
                                             result.smartScore = calculatePreciseScore(result, activeDomains.size)
                                             testResults[customConfig.raw] = result
                                         }
@@ -863,7 +852,7 @@ fun MainScreen() {
                     }
                 }
 
-                // ۸. بخش صادر کردن سفارشی (کپی یا ساخت فایل متنی برای کل یا ۱۰تای برتر)
+                // ۸. بخش صادر کردن سفارشی (کپی یا ساخت فایل متنی با برچسب اصلاح‌شده براساس نوع امتیاز، تاخیر و نوسان)
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -901,7 +890,7 @@ fun MainScreen() {
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                                 ) {
-                                    Text("کپی کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                    Text("کپی کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
                                 }
 
                                 Button(
@@ -917,7 +906,7 @@ fun MainScreen() {
                                             val text = topList.joinToString("\n")
                                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                                             clipboard.setPrimaryClip(ClipData.newPlainText("Top N Healthy", text))
-                                            Toast.makeText(context, "$limit کانفیگ برتر کپی شدند!", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "$limit کانفیگ برتر بر اساس امتیاز کپی شدند!", Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
                                         }
@@ -925,7 +914,57 @@ fun MainScreen() {
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                                 ) {
-                                    Text("کپی $exportLimitInputتای برتر", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                    Text("کپی ${exportLimitInput}تای برتر (امتیاز)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
+                                }
+                            }
+
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        val limit = exportLimitInput.toIntOrNull() ?: 10
+                                        val topJitter = testResults.values
+                                            .filter { it.isHealthy && it.Jitter >= 0 }
+                                            .sortedBy { it.Jitter } // نوسان کمتر بهتر است
+                                            .take(limit)
+                                            .map { it.config.raw }
+
+                                        if (topJitter.isNotEmpty()) {
+                                            val text = topJitter.joinToString("\n")
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Top N Jitter", text))
+                                            Toast.makeText(context, "$limit کانفیگ برتر بر اساس کمترین نوسان کپی شدند!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("کپی ${exportLimitInput}تای برتر (کمترین نوسان)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
+                                }
+
+                                Button(
+                                    onClick = {
+                                        val limit = exportLimitInput.toIntOrNull() ?: 10
+                                        val topDelay = testResults.values
+                                            .filter { it.isHealthy && it.realDelay > 0 }
+                                            .sortedBy { it.realDelay } // تاخیر کمتر بهتر است
+                                            .take(limit)
+                                            .map { it.config.raw }
+
+                                        if (topDelay.isNotEmpty()) {
+                                            val text = topDelay.joinToString("\n")
+                                            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                            clipboard.setPrimaryClip(ClipData.newPlainText("Top N Delay", text))
+                                            Toast.makeText(context, "$limit کانفیگ برتر بر اساس کمترین تاخیر کپی شدند!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    modifier = Modifier.weight(1f),
+                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                                ) {
+                                    Text("کپی ${exportLimitInput}تای برتر (کمترین تاخیر)", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
                                 }
                             }
 
@@ -947,7 +986,7 @@ fun MainScreen() {
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                                 ) {
-                                    Text("ذخیره فایل کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                    Text("ذخیره کل سالم‌ها", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
                                 }
 
                                 Button(
@@ -961,7 +1000,7 @@ fun MainScreen() {
 
                                         if (topList.isNotEmpty()) {
                                             fileContentToExport = topList.joinToString("\n")
-                                            fileExportLauncher.launch("top_${limit}_healthy.txt")
+                                            fileExportLauncher.launch("top_${limit}_by_score.txt")
                                         } else {
                                             Toast.makeText(context, "هیچ کانفیگ سالمی یافت نشد!", Toast.LENGTH_SHORT).show()
                                         }
@@ -969,7 +1008,7 @@ fun MainScreen() {
                                     modifier = Modifier.weight(1f),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                                 ) {
-                                    Text("ذخیره فایل $exportLimitInputتای برتر", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp, textAlign = TextAlign.Center)
+                                    Text("ذخیره فایل ${exportLimitInput}تای برتر", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 10.sp, textAlign = TextAlign.Center)
                                 }
                             }
                         }
@@ -983,7 +1022,6 @@ fun MainScreen() {
                     Text(strings.testResultsTitle, fontWeight = FontWeight.Bold, fontSize = 18.sp, color = Color.White)
                 }
 
-                // مرتب‌سازی نتایج بر حسب امتیاز هوشمند دقیق به صورت نزولی
                 val sortedResults = testResults.values.toList().sortedByDescending { it.smartScore }
 
                 items(sortedResults) { result ->
@@ -1006,7 +1044,6 @@ fun MainScreen() {
                                     fontSize = 14.sp,
                                     modifier = Modifier.weight(1f)
                                 )
-                                // نمایش امتیاز دقیق اعشاری کانفیگ
                                 Text(
                                     text = "Score: ${String.format("%.4f", result.smartScore)}",
                                     fontWeight = FontWeight.Bold,
