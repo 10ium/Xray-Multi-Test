@@ -55,6 +55,17 @@ interface Translation {
     val unknown: String
     val progressDownloading: String
     val progressExtracting: String
+    
+    // کلمات جدید متناظر با فینگرپرینت، مالتی‌پلکس و فرگمنت
+    val fragmentSettings: String
+    val enableFragment: String
+    val fragmentLength: String
+    val fragmentInterval: String
+    val muxSettings: String
+    val enableMux: String
+    val muxConcurrency: String
+    val xudpConcurrencyLabel: String
+    val tlsFingerprint: String
 }
 
 object PersianTranslation : Translation {
@@ -84,11 +95,21 @@ object PersianTranslation : Translation {
     override val settingsTitle = "شخصی‌سازی تنظیمات"
     override val localSocksPort = "پورت محلی SOCKS"
     override val testTimeout = "زمان انتظار تست (میلی‌ثانیه)"
-    override val customDomains = "سایت‌های تست دسترسی (با کاما جدا کنید)"
+    override val customDomains = "سایت‌های تست دسترسی"
     override val languageBtn = "تغییر زبان (EN)"
     override val unknown = "نامشخص"
     override val progressDownloading = "در حال دانلود هسته..."
     override val progressExtracting = "در حال استخراج باینری..."
+    
+    override val fragmentSettings = "پیکربندی فرگمنت (مبارزه با ممیزی SNI)"
+    override val enableFragment = "فعالسازی فرگمنت ترافیکی"
+    override val fragmentLength = "طول بازه بایت‌های فرگمنت"
+    override val fragmentInterval = "میزان تأخیر بین فرگمنت‌ها (ms)"
+    override val muxSettings = "پیکربندی چندگانه‌سازی (Mux / XUDP)"
+    override val enableMux = "فعالسازی مالتی‌پلکسر ترافیک"
+    override val muxConcurrency = "حداکثر کانکشن‌های همزمان TCP"
+    override val xudpConcurrencyLabel = "همزمانی تونل‌های XUDP"
+    override val tlsFingerprint = "شبیه‌ساز اثر انگشت uTLS"
 }
 
 object EnglishTranslation : Translation {
@@ -118,9 +139,19 @@ object EnglishTranslation : Translation {
     override val settingsTitle = "Custom Settings"
     override val localSocksPort = "Local SOCKS Port"
     override val testTimeout = "Test Timeout (ms)"
-    override val customDomains = "Test Websites (Comma separated)"
+    override val customDomains = "Test Websites"
     override val languageBtn = "Switch Language (FA)"
     override val unknown = "Unknown"
     override val progressDownloading = "Downloading core..."
     override val progressExtracting = "Extracting binary..."
+    
+    override val fragmentSettings = "Fragment Slicing (Anti-SNI Blocking)"
+    override val enableFragment = "Enable Traffic Fragmentation"
+    override val fragmentLength = "Fragment Length (bytes)"
+    override val fragmentInterval = "Fragment Delay (ms)"
+    override val muxSettings = "Multiplexing Config (Mux / XUDP)"
+    override val enableMux = "Enable Traffic Multiplexing"
+    override val muxConcurrency = "Max TCP Concurrency"
+    override val xudpConcurrencyLabel = "XUDP Concurrency Limit"
+    override val tlsFingerprint = "TLS uTLS Fingerprint Simulator"
 }
