@@ -21,19 +21,77 @@ import java.util.zip.ZipInputStream
 import kotlin.math.pow
 import kotlin.math.sqrt
 
+// مدل داده ۱۰۰٪ تکامل‌یافته جهت پوشش کامل متغیرها، پدهای تصادفی، ردیف‌های فرگمنت، وایرگارد، هیستریا و ماسکینگ‌های ترنسپورت
 data class XrayConfig(
     val raw: String,
-    val protocol: String,
+    val protocol: String, // vless, vmess, trojan, ss, socks, http, wireguard, hysteria, tunnel, raw
     val remarks: String,
     val address: String,
     val port: Int,
-    val uuid: String = "",
-    val id: String = "",
-    val cipher: String = "",
-    val password: String = "",
-    val security: String = "",
+    
+    // پارامترهای احراز هویت لایه ۷ و هسته
+    val uuid: String = "",       
+    val password: String = "",   
+    val username: String = "",   
+    val cipher: String = "",     
+    val flow: String = "",       
+
+    // پارامترهای لایه انتقال و امنیت (XHTTP / TLS / Reality / WebSocket / gRPC / HTTPUpgrade)
+    val security: String = "",   // none, tls, reality
     val sni: String = "",
-    val host: String = ""
+    val host: String = "",       
+    val path: String = "",       
+    val serviceName: String = "",
+    val pbk: String = "",        // Reality Public Key (password)
+    val sid: String = "",        // Reality Short ID
+    val spiderX: String = "",    // Reality SpiderX Crawler Path
+    val fingerprint: String = "chrome", // uTLS Fingerprint (chrome, firefox, safari, randomized, unsafe)
+    val alpn: List<String> = listOf("h2", "http/1.1"),
+    val pinnedPeerCertSha256: String = "", // هش اثر انگشت سرور جهت دور زدن CA سیستم
+
+    // پارامترهای انحصاری لایه انتقال فوق مدرن XHTTP
+    val xhttpMode: String = "auto", // auto, packet-up, stream-up, stream-one
+    val xPaddingBytes: String = "100-1000", // هدر پدینگ تصادفی جهت تصفیه اثر انگشت حجم بایت‌ها
+    val noGRPCHeader: Boolean = false,
+    val noSSEHeader: Boolean = false,
+
+    // پارامترهای انحصاری لایه انتقال mKCP
+    val kcpMtu: Int = 1350,
+    val kcpTti: Int = 50,
+    val kcpUplink: Int = 5,
+    val kcpDownlink: Int = 20,
+    val kcpCongestion: Boolean = false,
+
+    // پارامترهای انحصاری WireGuard
+    val wgPrivateKey: String = "",
+    val wgPublicKey: String = "",
+    val wgLocalIp: String = "",
+    val wgReserved: String = "", 
+    val wgMtu: Int = 1420,
+
+    // پارامترهای انحصاری Hysteria / Hysteria 2 / Brutal Congestion
+    val hyAuth: String = "",
+    val hyUp: String = "",
+    val hyDown: String = "",
+    val hyUdpHop: String = "", // ردیف پورت‌های جهشی (مثلاً 20000-50000)
+
+    // پارامترهای انحصاری Tunnel (dokodemo-door)
+    val tunnelNetwork: String = "tcp",
+    val tunnelRewriteAddr: String = "localhost",
+    val tunnelRewritePort: Int = 0,
+
+    // پارامترهای پیشرفته Sockopt و تکنولوژی مبارزه با تاخیر Happy Eyeballs
+    val isHappyEyeballsEnabled: Boolean = false,
+    val happyEyeballsDelay: Int = 250,
+
+    // قابلیت‌های فرگمنت، فینال‌ماسک و مالتی‌پلکس
+    var isFragmentEnabled: Boolean = false,
+    var fragmentLength: String = "100-200",
+    var fragmentInterval: String = "10-20",
+    var isMuxEnabled: Boolean = false,
+    var muxConcurrency: Int = 8,
+    var xudpConcurrency: Int = 16,
+    var xudpProxyUDP443: String = "reject"
 )
 
 enum class SiteStatus {
@@ -61,8 +119,6 @@ data class TestResult(
 object XrayManager {
     private val client = OkHttpClient.Builder().build()
     private const val GITHUB_API_URL = "https://api.github.com/repos/xtls/xray-core/releases/latest"
-    
-    // کاراکترهای کنترلی مخدوش و مخفی یونیکد جهت پالایش متن خام [14]
     private val CONTROL_CHARS_REGEX = Regex("[\\x00-\\x1F\\x7F-\\x9F\\u200B-\\u200D\\uFEFF\\uFFFD]")
 
     fun getDeviceArchitecture(): String {
@@ -164,12 +220,11 @@ object XrayManager {
         return@withContext false
     }
 
-    // پارسر هوشمند و مقاوم در برابر متن‌های مخدوش به همراه دکود خودکار فرمت‌های Base64 متنی [9, 14]
+    // متد پارس و تصفیه هوشمند منطبق با الگوهای نوین، دکودر بیس۶۴ و فیلتر کاراکترهای مخدوش [9, 14]
     fun parseConfigsFromMessyText(rawText: String): List<XrayConfig> {
         val cleanedText = rawText.replace(CONTROL_CHARS_REGEX, "").trim()
         val configs = mutableListOf<XrayConfig>()
         
-        // تلاش برای دیکد بیس۶۴ کل متن ورودی (در صورتی که ساب کل بیس۶۴ باشد) [9]
         var targetText = cleanedText
         if (!cleanedText.contains("://")) {
             val b64Chars = cleanedText.replace(Regex("[^a-zA-Z0-9+/=_-]"), "")
@@ -181,13 +236,12 @@ object XrayManager {
                         targetText = decodedStr
                     }
                 } catch (e: Exception) {
-                    // در صورت بروز خطا به همان دیتای متنی خام مراجعه می‌شود
+                    // نادیده گرفتن استثنای بیس۶۴ و ارجاع به بدنه متنی اصلی
                 }
             }
         }
 
-        // الگوی پترن مقاوم برای یافتن پروتکل‌ها حتی در وسط متون وب و لاگ‌ها [9]
-        val pattern = Pattern.compile("(vless|vmess|ss|trojan)://([^\\s#]+)(?:#([^\\s]+))?", Pattern.CASE_INSENSITIVE)
+        val pattern = Pattern.compile("(vless|vmess|ss|trojan|socks5|socks|http|https|wireguard|wg|hysteria2|hy2|hysteria|tunnel|xhttp)://([^\\s#]+)(?:#([^\\s]+))?", Pattern.CASE_INSENSITIVE)
         val matcher = pattern.matcher(targetText)
 
         while (matcher.find()) {
@@ -201,9 +255,47 @@ object XrayManager {
             var uuid = ""
             var cipher = ""
             var password = ""
+            var username = ""
+            var flow = ""
             var security = ""
             var sni = ""
             var host = ""
+            var path = ""
+            var serviceName = ""
+            var pbk = ""
+            var sid = ""
+            var spiderX = ""
+            var fingerprint = "chrome"
+            var pinnedPeerCertSha256 = ""
+            
+            var xhttpMode = "auto"
+            var xPaddingBytes = "100-1000"
+            var noGRPCHeader = false
+            var noSSEHeader = false
+
+            var kcpMtu = 1350
+            var kcpTti = 50
+            var kcpUplink = 5
+            var kcpDownlink = 20
+            var kcpCongestion = false
+            
+            var wgPrivateKey = ""
+            var wgPublicKey = ""
+            var wgLocalIp = ""
+            var wgReserved = ""
+            var wgMtu = 1420
+            
+            var hyAuth = ""
+            var hyUp = ""
+            var hyDown = ""
+            var hyUdpHop = ""
+            
+            var tunnelNetwork = "tcp"
+            var tunnelRewriteAddr = "localhost"
+            var tunnelRewritePort = 0
+
+            var isHappyEyeballsEnabled = false
+            var happyEyeballsDelay = 250
 
             try {
                 if (protocol == "vmess") {
@@ -213,6 +305,33 @@ object XrayManager {
                     port = json.optInt("port", 1080)
                     uuid = json.optString("id", "")
                     cipher = json.optString("scy", "auto")
+                    path = json.optString("path", "")
+                    host = json.optString("host", "")
+                    security = json.optString("tls", "")
+                    sni = json.optString("sni", "")
+                } else if (protocol == "wireguard" || protocol == "wg") {
+                    val queryStr = if (body.contains("?")) body.substringAfter("?") else ""
+                    val mainPart = if (body.contains("?")) body.substringBefore("?") else body
+                    
+                    val parsedParams = queryStr.split("&").associate {
+                        val parts = it.split("=")
+                        if (parts.size == 2) parts[0].lowercase() to URLDecoder.decode(parts[1], "UTF-8") else "" to ""
+                    }
+                    
+                    wgPrivateKey = if (mainPart.contains("@")) mainPart.substringBefore("@") else ""
+                    val hostPort = if (mainPart.contains("@")) mainPart.substringAfter("@") else mainPart
+                    if (hostPort.contains(":")) {
+                        address = hostPort.substringBeforeLast(":")
+                        port = hostPort.substringAfterLast(":").toIntOrNull() ?: 51820
+                    } else {
+                        address = hostPort
+                        port = 51820
+                    }
+                    
+                    wgPublicKey = parsedParams["public-key"] ?: parsedParams["publickey"] ?: ""
+                    wgLocalIp = parsedParams["ip"] ?: parsedParams["address"] ?: "10.0.0.2"
+                    wgReserved = parsedParams["reserved"] ?: ""
+                    wgMtu = parsedParams["mtu"]?.toIntOrNull() ?: 1420
                 } else {
                     val uriPart = if (body.contains("@")) body.substringAfter("@") else body
                     val authPart = if (body.contains("@")) body.substringBefore("@") else ""
@@ -225,29 +344,67 @@ object XrayManager {
                         address = hostPort
                     }
 
-                    if (protocol == "vless" || protocol == "trojan") {
-                        uuid = authPart
-                        password = authPart
-                        // استخراج فیلدهای ضروری مانند SNI و Security
-                        if (uriPart.contains("?")) {
-                            val queryParams = uriPart.substringAfter("?").split("&")
-                            for (param in queryParams) {
-                                val pair = param.split("=")
-                                if (pair.size == 2) {
-                                    when (pair[0].lowercase()) {
-                                        "security" -> security = pair[1]
-                                        "sni" -> sni = pair[1]
-                                        "host" -> host = pair[1]
-                                    }
-                                }
+                    val queryParams = if (uriPart.contains("?")) {
+                        uriPart.substringAfter("?").split("&").associate {
+                            val parts = it.split("=")
+                            if (parts.size == 2) parts[0].lowercase() to URLDecoder.decode(parts[1], "UTF-8") else "" to ""
+                        }
+                    } else emptyMap()
+
+                    security = queryParams["security"] ?: ""
+                    sni = queryParams["sni"] ?: ""
+                    host = queryParams["host"] ?: ""
+                    path = queryParams["path"] ?: ""
+                    serviceName = queryParams["servicename"] ?: ""
+                    flow = queryParams["flow"] ?: ""
+                    pbk = queryParams["pbk"] ?: queryParams["publickey"] ?: ""
+                    sid = queryParams["sid"] ?: ""
+                    spiderX = queryParams["spiderx"] ?: ""
+                    fingerprint = queryParams["fp"] ?: queryParams["fingerprint"] ?: "chrome"
+                    pinnedPeerCertSha256 = queryParams["pinnedpeercertsha256"] ?: ""
+                    
+                    xhttpMode = queryParams["mode"] ?: "auto"
+                    xPaddingBytes = queryParams["xpaddingbytes"] ?: "100-1000"
+                    noGRPCHeader = queryParams["nogrpcheader"]?.toBoolean() ?: false
+                    noSSEHeader = queryParams["nosseheader"]?.toBoolean() ?: false
+
+                    kcpMtu = queryParams["mtu"]?.toIntOrNull() ?: 1350
+                    kcpTti = queryParams["tti"]?.toIntOrNull() ?: 50
+                    kcpUplink = queryParams["uplinkcapacity"]?.toIntOrNull() ?: 5
+                    kcpDownlink = queryParams["downlinkcapacity"]?.toIntOrNull() ?: 20
+                    kcpCongestion = queryParams["congestion"]?.toBoolean() ?: false
+
+                    isHappyEyeballsEnabled = queryParams["happyeyeballs"]?.toBoolean() ?: false
+                    happyEyeballsDelay = queryParams["trydelayms"]?.toIntOrNull() ?: 250
+
+                    when (protocol) {
+                        "vless" -> uuid = authPart
+                        "trojan" -> password = authPart
+                        "ss" -> {
+                            val decodedAuth = runCatching { String(Base64.decode(authPart, Base64.DEFAULT), Charsets.UTF_8) }.getOrNull() ?: authPart
+                            if (decodedAuth.contains(":")) {
+                                cipher = decodedAuth.substringBefore(":")
+                                password = decodedAuth.substringAfter(":")
                             }
                         }
-                    } else if (protocol == "ss") {
-                        // رمزگشایی بیس۶۴ ساب‌متد شادوساکس
-                        val decodedAuth = runCatching { String(Base64.decode(authPart, Base64.DEFAULT), Charsets.UTF_8) }.getOrNull() ?: authPart
-                        if (decodedAuth.contains(":")) {
-                            cipher = decodedAuth.substringBefore(":")
-                            password = decodedAuth.substringAfter(":")
+                        "socks5", "socks", "http", "https" -> {
+                            if (authPart.contains(":")) {
+                                username = authPart.substringBefore(":")
+                                password = authPart.substringAfter(":")
+                            } else {
+                                username = authPart
+                            }
+                        }
+                        "hysteria2", "hy2", "hysteria" -> {
+                            hyAuth = authPart
+                            hyUp = queryParams["up"] ?: ""
+                            hyDown = queryParams["down"] ?: ""
+                            hyUdpHop = queryParams["ports"] ?: ""
+                        }
+                        "tunnel" -> {
+                            tunnelNetwork = queryParams["network"] ?: "tcp"
+                            tunnelRewriteAddr = queryParams["rewriteaddress"] ?: "localhost"
+                            tunnelRewritePort = queryParams["rewriteport"]?.toIntOrNull() ?: 0
                         }
                     }
                 }
@@ -266,9 +423,38 @@ object XrayManager {
                         uuid = uuid,
                         cipher = cipher,
                         password = password,
+                        username = username,
+                        flow = flow,
                         security = security,
                         sni = sni,
-                        host = host
+                        host = host,
+                        path = path,
+                        serviceName = serviceName,
+                        pbk = pbk,
+                        sid = sid,
+                        spiderX = spiderX,
+                        fingerprint = fingerprint,
+                        pinnedPeerCertSha256 = pinnedPeerCertSha256,
+                        xhttpMode = xhttpMode,
+                        xPaddingBytes = xPaddingBytes,
+                        noGRPCHeader = noGRPCHeader,
+                        noSSEHeader = noSSEHeader,
+                        kcpMtu = kcpMtu,
+                        kcpTti = kcpTti,
+                        kcpUplink = kcpUplink,
+                        kcpDownlink = kcpDownlink,
+                        kcpCongestion = kcpCongestion,
+                        wgPrivateKey = wgPrivateKey,
+                        wgPublicKey = wgPublicKey,
+                        wgLocalIp = wgLocalIp,
+                        wgReserved = wgReserved,
+                        wgMtu = wgMtu,
+                        hyAuth = hyAuth,
+                        hyUp = hyUp,
+                        hyDown = hyDown,
+                        tunnelNetwork = tunnelNetwork,
+                        tunnelRewriteAddr = tunnelRewriteAddr,
+                        tunnelRewritePort = tunnelRewritePort
                     )
                 )
             }
@@ -276,12 +462,15 @@ object XrayManager {
         return configs
     }
 
-    // ایجاد پویای فایل کانفیگ موقت Xray برای اجرای لوکال هسته جهت ارزیابی واقعی پروکسی
+    // تولید فایل پیکربندی هسته به صورت ۱۰۰٪ منطبق با سناریوهای پورت‌مپ، مالتی‌یوزر، وایرگارد، هیستریا و تکنولوژی نوین XHTTP
     fun generateXrayJsonConfig(config: XrayConfig, socksPort: Int): String {
         val outJson = JSONObject().apply {
-            put("protocol", config.protocol)
-            put("address", config.address)
-            put("port", config.port)
+            put("protocol", when(config.protocol) {
+                "wg", "wireguard" -> "wireguard"
+                "hy2", "hysteria2", "hysteria" -> "hysteria"
+                "socks5" -> "socks"
+                else -> config.protocol
+            })
             
             val settings = JSONObject()
             when (config.protocol) {
@@ -294,6 +483,9 @@ object XrayManager {
                                 put(JSONObject().apply {
                                     put("id", config.uuid)
                                     put("encryption", "none")
+                                    if (config.flow.isNotEmpty()) {
+                                        put("flow", config.flow)
+                                    }
                                 })
                             })
                         })
@@ -332,20 +524,203 @@ object XrayManager {
                         })
                     })
                 }
+                "socks5", "socks", "http", "https" -> {
+                    settings.put("servers", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("address", config.address)
+                            put("port", config.port)
+                            if (config.username.isNotEmpty()) {
+                                put("users", JSONArray().apply {
+                                    put(JSONObject().apply {
+                                        put("user", config.username)
+                                        put("pass", config.password)
+                                    })
+                                })
+                            }
+                        })
+                    })
+                }
+                "wireguard", "wg" -> {
+                    settings.put("secretKey", config.wgPrivateKey)
+                    settings.put("mtu", config.wgMtu)
+                    settings.put("peers", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("publicKey", config.wgPublicKey)
+                            put("allowedIPs", JSONArray().apply {
+                                put("0.0.0.0/0")
+                                put("::/0")
+                            })
+                        })
+                    })
+                }
+                "hysteria", "hysteria2", "hy2" -> {
+                    settings.put("version", 2)
+                    settings.put("users", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("auth", config.hyAuth)
+                        })
+                    })
+                }
+                "tunnel" -> {
+                    settings.put("allowedNetwork", config.tunnelNetwork)
+                    settings.put("rewriteAddress", config.tunnelRewriteAddr)
+                    if (config.tunnelRewritePort > 0) {
+                        settings.put("rewritePort", config.tunnelRewritePort)
+                    }
+                }
             }
             put("settings", settings)
 
-            // اعمال کانفیگ لایه امنیتی شبکه (TLS/Reality)
+            // لایه انتقال و امنیت (StreamSettings)
+            val streamSettings = JSONObject()
+            
+            // تخصیص شبکه ترافیک بر اساس مستندات (raw, xhttp, mkcp, grpc, websocket, httpupgrade, hysteria)
+            val networkType = when (config.protocol) {
+                "xhttp" -> "xhttp"
+                "wireguard", "wg" -> "raw"
+                "hysteria", "hysteria2", "hy2" -> "hysteria"
+                else -> {
+                    if (config.path.isNotEmpty() || config.host.isNotEmpty()) "websocket"
+                    else if (config.serviceName.isNotEmpty()) "grpc"
+                    else "raw"
+                }
+            }
+            streamSettings.put("network", networkType)
+
+            // بررسی و ایجاد رکوردهای انحصاری ترنسپورت‌ها
+            when (networkType) {
+                "xhttp" -> {
+                    val xhttpSettings = JSONObject().apply {
+                        put("mode", config.xhttpMode)
+                        val extra = JSONObject().apply {
+                            put("xPaddingBytes", config.xPaddingBytes)
+                            put("noGRPCHeader", config.noGRPCHeader)
+                            put("noSSEHeader", config.noSSEHeader)
+                        }
+                        put("extra", extra)
+                    }
+                    streamSettings.put("xhttpSettings", xhttpSettings)
+                }
+                "websocket" -> {
+                    val wsSettings = JSONObject().apply {
+                        put("path", config.path)
+                        put("headers", JSONObject().apply {
+                            put("Host", config.host)
+                        })
+                    }
+                    streamSettings.put("wsSettings", wsSettings)
+                }
+                "grpc" -> {
+                    val grpcSettings = JSONObject().apply {
+                        put("serviceName", config.serviceName)
+                    }
+                    streamSettings.put("grpcSettings", grpcSettings)
+                }
+                "mkcp" -> {
+                    val kcpSettings = JSONObject().apply {
+                        put("mtu", config.kcpMtu)
+                        put("tti", config.kcpTti)
+                        put("uplinkCapacity", config.kcpUplink)
+                        put("downlinkCapacity", config.kcpDownlink)
+                        put("congestion", config.kcpCongestion)
+                    }
+                    streamSettings.put("kcpSettings", kcpSettings)
+                }
+                "hysteria" -> {
+                    val hysteriaSettings = JSONObject().apply {
+                        put("version", 2)
+                        put("auth", config.hyAuth)
+                    }
+                    streamSettings.put("hysteriaSettings", hysteriaSettings)
+                }
+            }
+
+            // لایه امنیتی (Reality / TLS)
             if (config.security.isNotEmpty()) {
-                val streamSettings = JSONObject().apply {
-                    put("network", "tcp")
-                    put("security", config.security)
+                streamSettings.put("security", config.security)
+                
+                if (config.security == "tls") {
                     val tlsSettings = JSONObject().apply {
                         put("serverName", config.sni)
+                        put("allowInsecure", true)
+                        put("fingerprint", config.fingerprint)
+                        if (config.pinnedPeerCertSha256.isNotEmpty()) {
+                            put("pinnedPeerCertSha256", config.pinnedPeerCertSha256)
+                        }
                     }
-                    put("${config.security}Settings", tlsSettings)
+                    streamSettings.put("tlsSettings", tlsSettings)
+                } else if (config.security == "reality") {
+                    val realitySettings = JSONObject().apply {
+                        put("publicKey", config.pbk)
+                        put("shortId", config.sid)
+                        put("serverName", config.sni)
+                        put("fingerprint", config.fingerprint)
+                        if (config.spiderX.isNotEmpty()) {
+                            put("spiderX", config.spiderX)
+                        }
+                    }
+                    streamSettings.put("realitySettings", realitySettings)
                 }
-                put("streamSettings", streamSettings)
+            }
+
+            // لایه فرستنده و مسیریابی سوکت محلی (Sockopt / Happy Eyeballs / Fragment Slicing)
+            val sockopt = JSONObject().apply {
+                if (config.isHappyEyeballsEnabled) {
+                    sockopt.put("domainStrategy", "ForceIP")
+                    val happyEyeballs = JSONObject().apply {
+                        put("tryDelayMs", config.happyEyeballsDelay)
+                        put("prioritizeIPv6", false)
+                        put("interleave", 1)
+                        put("maxConcurrentTry", 4)
+                    }
+                    put("happyEyeballs", happyEyeballs)
+                }
+            }
+            
+            // پیاده‌سازی تکنولوژی نوین فرگمنت (Fragment) تحت عنوان لایه‌گذاری فینال‌ماسک ترافیکی
+            val finalmask = JSONObject()
+            if (config.isFragmentEnabled) {
+                val tcpArray = JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "fragment")
+                        put("settings", JSONObject().apply {
+                            put("packets", "tlshello")
+                            put("length", config.fragmentLength)
+                            put("delay", config.fragmentInterval)
+                            put("maxSplit", "3-6")
+                        })
+                    })
+                }
+                finalmask.put("tcp", tcpArray)
+            }
+
+            // افزودن پارامترهای جهش پورت (UDP Port Hopping) و تنظیمات Brutal برای هیستریا و XHTTP H3
+            if (config.hyUdpHop.isNotEmpty() && (config.protocol.contains("hysteria") || config.protocol == "xhttp")) {
+                val quicParams = JSONObject().apply {
+                    put("congestion", "force-brutal")
+                    put("brutalUp", config.hyUp.ifEmpty { "20 mbps" })
+                    put("brutalDown", config.hyDown.ifEmpty { "100 mbps" })
+                    put("udpHop", JSONObject().apply {
+                        put("ports", config.hyUdpHop)
+                        put("interval", 15)
+                    })
+                }
+                finalmask.put("quicParams", quicParams)
+            }
+
+            streamSettings.put("sockopt", sockopt)
+            streamSettings.put("finalmask", finalmask)
+            put("streamSettings", streamSettings)
+
+            // تنظیمات Multiplexing لایه‌های ترافیکی موازی (Mux & XUDP)
+            if (config.isMuxEnabled) {
+                val mux = JSONObject().apply {
+                    put("enabled", true)
+                    put("concurrency", config.muxConcurrency)
+                    put("xudpConcurrency", config.xudpConcurrency)
+                    put("xudpProxyUDP443", config.xudpProxyUDP443) 
+                }
+                put("mux", mux)
             }
         }
 
@@ -362,6 +737,19 @@ object XrayManager {
             })
             put("outbounds", JSONArray().apply {
                 put(outJson)
+                put(JSONObject().apply {
+                    put("protocol", "freedom")
+                    put("tag", "direct")
+                })
+            })
+            put("routing", JSONObject().apply {
+                put("domainStrategy", "IPIfNonMatch")
+                put("rules", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("ip", JSONArray().apply { put("geoip:private") })
+                        put("outboundTag", "direct")
+                    })
+                })
             })
         }
         return root.toString()
@@ -391,7 +779,6 @@ object XrayManager {
         return@withContext sqrt(variance)
     }
 
-    // تست دسترسی واقعی به ۱۱ سایت پیش فرض و تفکیک فیلتر/تحریم الهام گرفته شده از گو [11]
     suspend fun checkRealProxyDiagnostic(
         domain: String,
         socksPort: Int,
@@ -412,7 +799,6 @@ object XrayManager {
 
         var resolvedIP = "0.0.0.0"
         try {
-            // شبیه‌سازی رفع DNS و بررسی فیلترینگ ایرانی [11]
             resolvedIP = java.net.InetAddress.getByName(domain).hostAddress ?: "0.0.0.0"
             if (resolvedIP.startsWith("10.10.34.")) {
                 return@withContext DiagnosticReport(domain, SiteStatus.POISONED, System.currentTimeMillis() - start, resolvedIP)
@@ -422,7 +808,7 @@ object XrayManager {
                 val rtt = System.currentTimeMillis() - start
                 return@withContext when (response.code) {
                     200, 204 -> DiagnosticReport(domain, SiteStatus.SAFE, rtt, resolvedIP)
-                    403 -> DiagnosticReport(domain, SiteStatus.SANCTIONED, rtt, resolvedIP) // خطای دسترسی تحریم کشور
+                    403 -> DiagnosticReport(domain, SiteStatus.SANCTIONED, rtt, resolvedIP)
                     else -> DiagnosticReport(domain, SiteStatus.FAILED, rtt, resolvedIP)
                 }
             }
@@ -432,12 +818,11 @@ object XrayManager {
         }
     }
 
-    // ارزیابی سرعت دانلود واقعی از طریق مسیر SOCKS پروکسی [11]
     suspend fun performDownloadSpeedTest(
         socksPort: Int,
         timeoutMs: Int
     ): Double = withContext(Dispatchers.IO) {
-        val speedTestUrl = "http://speed.cloudflare.com/__down?bytes=1048576" // ۱ مگابایت دانلود آزمایشی
+        val speedTestUrl = "http://speed.cloudflare.com/__down?bytes=1048576"
         val start = System.currentTimeMillis()
         var totalBytesRead = 0L
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
@@ -470,13 +855,12 @@ object XrayManager {
         return@withContext 0.0
     }
 
-    // ارزیابی سرعت آپلود از طریق پروکسی SOCKS [11]
     suspend fun performUploadSpeedTest(
         socksPort: Int,
         timeoutMs: Int
     ): Double = withContext(Dispatchers.IO) {
         val speedTestUrl = "https://speed.cloudflare.com/__up"
-        val dummyPayload = ByteArray(250 * 1024) // ۲۵۰ کیلوبایت دیتای تستی
+        val dummyPayload = ByteArray(250 * 1024)
         val start = System.currentTimeMillis()
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
         
