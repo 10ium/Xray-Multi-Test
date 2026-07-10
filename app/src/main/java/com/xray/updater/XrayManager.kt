@@ -152,74 +152,92 @@ object XrayManager {
     }
 
     suspend fun downloadAndInstallCore(
-        version: String,
-        targetDir: File,
-        onProgress: (String, Float) -> Unit
-    ): Boolean = withContext(Dispatchers.IO) {
-        try {
-            val arch = getDeviceArchitecture()
-            val zipName = "Xray-android-$arch.zip"
-            val downloadUrl = "https://github.com/xtls/xray-core/releases/download/$version/$zipName"
+            version: String,
+            targetDir: File,
+            onProgress: (String, Float) -> Unit
+        ): Boolean = withContext(Dispatchers.IO) {
+            try {
+                val arch = getDeviceArchitecture()
+                // GitHub release asset naming: Xray-android-{arch}.zip (capital X)
+                val zipName = "Xray-android-$arch.zip"
+                val downloadUrl = "https://github.com/xtls/xray-core/releases/download/$version/$zipName"
 
-            onProgress("Downloading...", 0.1f)
-            val request = Request.Builder().url(downloadUrl).build()
-            
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@withContext false
-                
-                val body = response.body ?: return@withContext false
-                val totalBytes = body.contentLength()
-                val tempZipFile = File(targetDir, "temp_xray.zip")
-                
-                body.byteStream().use { input ->
-                    FileOutputStream(tempZipFile).use { output ->
-                        val buffer = ByteArray(8192)
-                        var bytesRead: Int
-                        var downloadedBytes: Long = 0
-                        while (input.read(buffer).also { bytesRead = it } != -1) {
-                            output.write(buffer, 0, bytesRead)
-                            downloadedBytes += bytesRead
-                            if (totalBytes > 0) {
-                                val progress = 0.1f + ((downloadedBytes.toFloat() / totalBytes.toFloat()) * 0.7f)
-                                onProgress("Downloading...", progress)
-                            }
-                        }
-                    }
-                }
+                onProgress("Downloading...", 0.1f)
+                val request = Request.Builder().url(downloadUrl).build()
 
-                onProgress("Extracting...", 0.85f)
-                ZipInputStream(BufferedInputStream(tempZipFile.inputStream())).use { zis ->
-                    var entry = zis.nextEntry
-                    while (entry != null) {
-                        val outFile = File(targetDir, entry.name)
-                        if (entry.isDirectory) {
-                            outFile.mkdirs()
-                        } else {
-                            outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { fos ->
-                                val buffer = ByteArray(8192)
-                                var len: Int
-                                while (zis.read(buffer).also { len = it } != -1) {
-                                    fos.write(buffer, 0, len)
-                                }
-                            }
-                            if (entry.name == "xray" || entry.name.endsWith(".so")) {
-                                outFile.setExecutable(true, false)
-                            }
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        // Try fallback with lowercase 'xray'
+                        val fallbackUrl = "https://github.com/xtls/xray-core/releases/download/$version/xray-android-$arch.zip"
+                        val fallbackRequest = Request.Builder().url(fallbackUrl).build()
+                        client.newCall(fallbackRequest).execute().use { fallbackResponse ->
+                            if (!fallbackResponse.isSuccessful) return@withContext false
+                            processDownload(fallbackResponse, targetDir, onProgress)
                         }
-                        zis.closeEntry()
-                        entry = zis.nextEntry
+                        return@withContext true
                     }
+                    processDownload(response, targetDir, onProgress)
                 }
-                tempZipFile.delete()
-                onProgress("Success", 1.0f)
-                return@withContext true
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            return@withContext false
         }
-        return@withContext false
-    }
+
+        private suspend fun processDownload(
+            response: okhttp3.Response,
+            targetDir: File,
+            onProgress: (String, Float) -> Unit
+        ): Boolean = withContext(Dispatchers.IO) {
+            val body = response.body ?: return@withContext false
+            val totalBytes = body.contentLength()
+            val tempZipFile = File(targetDir, "temp_xray.zip")
+
+            body.byteStream().use { input ->
+                FileOutputStream(tempZipFile).use { output ->
+                    val buffer = ByteArray(8192)
+                    var bytesRead: Int
+                    var downloadedBytes: Long = 0
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        downloadedBytes += bytesRead
+                        if (totalBytes > 0) {
+                            val progress = 0.1f + ((downloadedBytes.toFloat() / totalBytes.toFloat()) * 0.7f)
+                            onProgress("Downloading...", progress)
+                        }
+                    }
+                }
+            }
+
+            onProgress("Extracting...", 0.85f)
+            ZipInputStream(BufferedInputStream(tempZipFile.inputStream())).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val outFile = File(targetDir, entry.name)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { fos ->
+                            val buffer = ByteArray(8192)
+                            var len: Int
+                            while (zis.read(buffer).also { len = it } != -1) {
+                                fos.write(buffer, 0, len)
+                            }
+                        }
+                        // Make xray binary executable
+                        if (entry.name == "xray" || entry.name.endsWith(".so")) {
+                            outFile.setExecutable(true, false)
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            tempZipFile.delete()
+            onProgress("Success", 1.0f)
+            return@withContext true
+        }
 
     fun parseConfigsFromMessyText(rawText: String): List<XrayConfig> {
         val cleanedText = rawText.replace(CONTROL_CHARS_REGEX, "").trim()
@@ -644,16 +662,27 @@ object XrayManager {
                     }
                     streamSettings.put("tlsSettings", tlsSettings)
                 } else if (config.security == "reality") {
-                    val realitySettings = JSONObject().apply {
-                        put("publicKey", config.pbk)
-                        put("shortId", config.sid)
+                    val tlsSettings = JSONObject().apply {
                         put("serverName", config.sni)
+                        put("allowInsecure", true)
                         put("fingerprint", config.fingerprint)
-                        if (config.spiderX.isNotEmpty()) {
-                            put("spiderX", config.spiderX)
+                        if (config.pinnedPeerCertSha256.isNotEmpty()) {
+                            put("pinnedPeerCertSha256", config.pinnedPeerCertSha256)
                         }
+                        
+                        // Reality is nested inside TLS settings
+                        val realitySettings = JSONObject().apply {
+                            put("show", false)
+                            put("enabled", true)
+                            put("publicKey", config.pbk)
+                            put("shortId", config.sid)
+                            if (config.spiderX.isNotEmpty()) {
+                                put("spiderX", config.spiderX)
+                            }
+                        }
+                        put("realitySettings", realitySettings)
                     }
-                    streamSettings.put("realitySettings", realitySettings)
+                    streamSettings.put("tlsSettings", tlsSettings)
                 }
             }
 
@@ -745,6 +774,21 @@ object XrayManager {
         return root.toString()
     }
 
+    // TCP ping through SOCKS proxy to test full handshake (not just port reachability)
+    suspend fun performTcpPingViaProxy(host: String, port: Int, socksPort: Int, timeoutMs: Int): Long = withContext(Dispatchers.IO) {
+        val start = System.currentTimeMillis()
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+        try {
+            Socket(proxy).use { socket ->
+                socket.connect(InetSocketAddress(host, port), timeoutMs)
+                return@withContext System.currentTimeMillis() - start
+            }
+        } catch (e: Exception) {
+            return@withContext -1L
+        }
+    }
+
+    // Direct TCP ping (for initial server reachability check)
     suspend fun performTcpPing(host: String, port: Int, timeoutMs: Int): Long = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
         try {
@@ -831,15 +875,35 @@ object XrayManager {
         return@withContext -1L
     }
 
-    // بنچمارک دقیق سرعت دانلود و سرعت آپلود به صورت کاملاً تونل شده از پروکسی SOCKS
+    // 알려진 고속 다운로드 테스트 파일 URL들 (대용량 바이너리 파일)
+    private val DOWNLOAD_TEST_URLS = listOf(
+        "https://speed.hetzner.de/100MB.bin",
+        "https://proof.ovh.net/files/100Mb.dat",
+        "https://speedtest.tele2.net/100MB.zip",
+        "https://speed.cloudflare.com/__down?bytes=104857600",  // 100MB via query param
+        "https://speed.cloudflare.com/__down?bytes=10485760"   // 10MB fallback
+    )
+    
+    private val LATENCY_TEST_URLS = listOf(
+        "https://www.google.com/generate_204",
+        "https://www.gstatic.com/generate_204",
+        "https://www.cloudflare.com/cdn-cgi/trace",
+        "https://cp.cloudflare.com/generate_204"
+    )
+    
+    private fun getRandomDownloadUrl(): String = DOWNLOAD_TEST_URLS.random()
+    private fun getRandomLatencyUrl(): String = LATENCY_TEST_URLS.random()
+
+    // 정확한 다운로드 속도 측정 - GET 요청으로 대용량 파일 다운로드
     suspend fun performDownloadSpeedTest(
         socksPort: Int,
         timeoutMs: Int,
-        testUrl: String
+        testUrl: String? = null
     ): Double = withContext(Dispatchers.IO) {
         val start = System.currentTimeMillis()
         var totalBytesRead = 0L
         val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+        val targetUrl = testUrl ?: getRandomDownloadUrl()
         
         try {
             val proxyClient = OkHttpClient.Builder()
@@ -848,7 +912,12 @@ object XrayManager {
                 .readTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
                 .build()
 
-            val request = Request.Builder().url(testUrl).build()
+            val request = Request.Builder()
+                .url(targetUrl)
+                .header("User-Agent", "Xray-Multi-Test-Android/SpeedTest")
+                .get()
+                .build()
+
             proxyClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext 0.0
                 val body = response.body ?: return@withContext 0.0
@@ -857,16 +926,69 @@ object XrayManager {
                 var bytesRead: Int
                 while (stream.read(buffer).also { bytesRead = it } != -1) {
                     totalBytesRead += bytesRead
+                    // 조기 종료 방지 - 최소 3초 이상 다운로드
+                    if (System.currentTimeMillis() - start > 3000 && totalBytesRead > 1024 * 1024) {
+                        break // 1MB 이상이고 3초 경과시 충분한 샘플 확보
+                    }
                 }
             }
             val totalTime = (System.currentTimeMillis() - start) / 1000.0
-            if (totalTime > 0) {
+            if (totalTime >= 0.5 && totalBytesRead > 1024) { // 최소 0.5초, 1KB 이상
                 return@withContext ((totalBytesRead * 8) / (1024.0 * 1024.0)) / totalTime
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
         return@withContext 0.0
+    }
+
+    // 업로드 속도 테스트 - 큰 더미 데이터 POST
+    suspend fun performUploadSpeedTest(
+        socksPort: Int,
+        timeoutMs: Int,
+        testUrl: String? = null
+    ): Double = withContext(Dispatchers.IO) {
+        val dummyPayload = ByteArray(250 * 1024) // 250KB 업로드
+        val start = System.currentTimeMillis()
+        val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", socksPort))
+        
+        try {
+            val proxyClient = OkHttpClient.Builder()
+                .proxy(proxy)
+                .connectTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
+                .writeTimeout(java.time.Duration.ofMillis(timeoutMs.toLong()))
+                .build()
+
+            val request = Request.Builder()
+                .url(testUrl ?: "https://httpbin.org/post") // 업로드 테스트용 엔드포인트
+                .post(dummyPayload.toRequestBody())
+                .build()
+
+            proxyClient.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    val totalTime = (System.currentTimeMillis() - start) / 1000.0
+                    if (totalTime > 0) {
+                        return@withContext ((dummyPayload.size * 8) / (1024.0 * 1024.0)) / totalTime
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return@withContext 0.0
+    }
+
+    // Jitter via SOCKS proxy (full handshake through tunnel)
+    suspend fun calculateJitterViaProxy(host: String, port: Int, socksPort: Int, timeoutMs: Int): Double = withContext(Dispatchers.IO) {
+        val samples = mutableListOf<Long>()
+        repeat(5) {
+            val ping = performTcpPingViaProxy(host, port, socksPort, timeoutMs)
+            if (ping > 0) samples.add(ping)
+        }
+        if (samples.size < 2) return@withContext -1.0
+        val mean = samples.average()
+        val variance = samples.map { (it - mean).pow(2) }.sum() / samples.size
+        return@withContext sqrt(variance)
     }
 
     suspend fun performUploadSpeedTest(
@@ -917,5 +1039,35 @@ object XrayManager {
             e.printStackTrace()
         }
         return@withContext emptyList()
+    }
+
+    // Validate config has all required fields before testing
+    fun validateConfig(config: XrayConfig): Pair<Boolean, String> {
+        return when (config.protocol) {
+            "vless", "vmess" -> {
+                if (config.uuid.isEmpty()) Pair(false, "Missing UUID")
+                else Pair(true, "")
+            }
+            "trojan" -> {
+                if (config.password.isEmpty()) Pair(false, "Missing password")
+                else Pair(true, "")
+            }
+            "ss" -> {
+                if (config.cipher.isEmpty() || config.password.isEmpty()) Pair(false, "Missing cipher or password")
+                else Pair(true, "")
+            }
+            "wireguard", "wg" -> {
+                if (config.wgPrivateKey.isEmpty() || config.wgPublicKey.isEmpty()) Pair(false, "Missing WireGuard keys")
+                else Pair(true, "")
+            }
+            "hysteria2", "hysteria", "hy2" -> {
+                if (config.hyAuth.isEmpty()) Pair(false, "Missing Hysteria auth")
+                else Pair(true, "")
+            }
+            "socks5", "socks", "http", "https" -> {
+                Pair(true, "") // Only address/port required
+            }
+            else -> Pair(true, "")
+        }
     }
 }
