@@ -748,7 +748,7 @@ fun MainScreen() {
 
                                 val semaphore = Semaphore(concurrencyLimit)
 
-                                val jobs = configsList.map { config ->
+                                val jobs = configsList.mapIndexed { index, config ->
                                     launch {
                                         semaphore.withPermit {
                                             val customConfig = config.copy(
@@ -764,74 +764,122 @@ fun MainScreen() {
                                             val result = TestResult(customConfig)
                                             testResults[customConfig.raw] = result
 
-                                            // تست ۱: TCP Ping و Jitter
-                                            if (isTcpPingChecked) {
-                                                val tcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, pingTimeout)
-                                                result.tcpPing = tcpPing
-                                                if (tcpPing > 0 && isJitterChecked) {
-                                                    result.Jitter = XrayManager.calculateJitter(customConfig.address, customConfig.port, pingTimeout)
-                                                }
+                                            // Pre-flight validation
+                                            val (isValid, validationMessage) = XrayManager.validateConfig(customConfig)
+                                            if (!isValid) {
+                                                result.isHealthy = false
+                                                Log.e("XrayMultiTest", "Config validation failed for ${customConfig.remarks}: $validationMessage")
+                                                Toast.makeText(context, "${customConfig.remarks}: $validationMessage", Toast.LENGTH_LONG).show()
+                                                return@withPermit
                                             }
 
-                                            val isServerReachable = if (isTcpPingChecked) result.tcpPing > 0 else true
+                                            // Assign a unique SOCKS port for this config
+                                            val baseSocksPort = socksPortInput.toIntOrNull() ?: 20000
+                                            val uniqueSocksPort = baseSocksPort + index
 
-                                            if (isServerReachable) {
-                                                val xrayConfigFile = File(context.filesDir, "temp_config.json")
-                                                val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, socksPort)
-                                                FileOutputStream(xrayConfigFile).use { fos ->
-                                                    fos.write(jsonConfigString.toByteArray())
-                                                }
+                                            // تست ۱: TCP Ping مستقیم (سرور قابل دسترس است؟)
+                                            val directTcpPing = XrayManager.performTcpPing(customConfig.address, customConfig.port, pingTimeout)
+                                            if (directTcpPing <= 0) {
+                                                result.tcpPing = directTcpPing
+                                                result.isHealthy = false
+                                                Log.e("XrayMultiTest", "Direct TCP Ping failed for ${customConfig.remarks}")
+                                                testResults[customConfig.raw] = result // Update result before continuing
+                                                return@withPermit // سرور قابل دسترس نیست، ادامه تست بی‌معناست
+                                            }
 
-                                                var xrayProcess: Process? = null
-                                                try {
-                                                    val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
-                                                    xrayProcess = ProcessBuilder(xrayBinaryPath, "-config", xrayConfigFile.absolutePath)
-                                                        .directory(context.filesDir)
-                                                        .start()
 
-                                                    kotlinx.coroutines.delay(500)
-                                                } catch (e: Exception) {
-                                                    e.printStackTrace()
-                                                }
+                                            val xrayConfigFile = File(context.filesDir, "temp_config_${index}.json")
+                                            val jsonConfigString = XrayManager.generateXrayJsonConfig(customConfig, uniqueSocksPort)
+                                            FileOutputStream(xrayConfigFile).use { fos ->
+                                                fos.write(jsonConfigString.toByteArray())
+                                            }
 
-                                                try {
-                                                    // تست ۲: تاخیر واقعی HTTP از درون پروکسی SOCKS (اتصال به سرور) [11]
-                                                    if (isRealDelayChecked) {
-                                                        val httpDelay = XrayManager.performRealDelay(socksPort, realDelayTimeout, realDelayUrlInput)
-                                                        result.realDelay = httpDelay
-                                                        result.isHealthy = (httpDelay > 0)
-                                                    } else {
-                                                        result.isHealthy = true
-                                                    }
-
-                                                    // بررسی دسترسی سایت‌ها (فقط در صورتی که اتصال اول به سرور با موفقیت تایید شود) [11]
-                                                    if (result.isHealthy) {
-                                                        // تست ۳: تست دسترسی به سایت‌ها از مسیر تونل
-                                                        if (isWebsiteReachChecked && activeDomains.isNotEmpty()) {
-                                                            for (domain in activeDomains) {
-                                                                if (domain.isNotEmpty()) {
-                                                                    val report = XrayManager.checkRealProxyDiagnostic(domain, socksPort, realDelayTimeout)
-                                                                    result.siteReports.add(report)
-                                                                }
-                                                            }
-                                                        }
-
-                                                        // تست ۴: تست سرعت دانلود
-                                                        if (isDownloadSpeedChecked) {
-                                                            result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
-                                                        }
-
-                                                        // تست ۵: تست سرعت آپلود
-                                                        if (isUploadSpeedChecked) {
-                                                            result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(socksPort, speedTimeout, speedTestUrlInput)
-                                                        }
-                                                    }
-
-                                                } catch (e: Exception) {
+                                            var xrayProcess: Process? = null
+                                            try {
+                                                val xrayBinaryPath = File(context.filesDir, "xray").absolutePath
+                                                
+                                                // Check for execute permission
+                                                if (!File(xrayBinaryPath).canExecute()) {
+                                                    Log.e("XrayMultiTest", "Xray binary is not executable at $xrayBinaryPath. This is often due to Android 10+ W^X restrictions.")
+                                                    Toast.makeText(context, "خطا: فایل Xray قابل اجرا نیست. (Android W^X)", Toast.LENGTH_LONG).show()
                                                     result.isHealthy = false
-                                                } finally {
-                                                    xrayProcess?.destroy()
+                                                    testResults[customConfig.raw] = result
+                                                    return@withPermit
                                                 }
+
+                                                xrayProcess = ProcessBuilder(xrayBinaryPath, "-config", xrayConfigFile.absolutePath)
+                                                    .directory(context.filesDir)
+                                                    .start()
+
+                                                // Wait for Xray SOCKS port to be ready (health check)
+                                                var retries = 0
+                                                var portReady = false
+                                                while (retries < 30 && !portReady) { // 3 seconds max (30 * 100ms)
+                                                    try {
+                                                        Socket().use { socket ->
+                                                            socket.connect(InetSocketAddress("127.0.0.1", uniqueSocksPort), 200) // Small timeout for connect
+                                                            portReady = true
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        kotlinx.coroutines.delay(100)
+                                                        retries++
+                                                    }
+                                                }
+                                                if (!portReady) {
+                                                    Log.e("XrayMultiTest", "Xray SOCKS port $uniqueSocksPort not ready after 3s for ${customConfig.remarks}")
+                                                    Toast.makeText(context, "خطا: پورت پراکسی Xray آماده نشد.", Toast.LENGTH_LONG).show()
+                                                    result.isHealthy = false
+                                                    testResults[customConfig.raw] = result
+                                                    return@withPermit // Port not ready, skip further tests for this config
+                                                }
+
+                                                // تست ۲: TCP Ping و Jitter از درون پروکسی SOCKS (اتصال کامل از تونل)
+                                                if (isTcpPingChecked) {
+                                                    val tcpPingViaProxy = XrayManager.performTcpPingViaProxy(customConfig.address, customConfig.port, uniqueSocksPort, pingTimeout)
+                                                    result.tcpPing = tcpPingViaProxy
+                                                    if (tcpPingViaProxy > 0 && isJitterChecked) {
+                                                        result.Jitter = XrayManager.calculateJitterViaProxy(customConfig.address, customConfig.port, uniqueSocksPort, pingTimeout)
+                                                    }
+                                                }
+                                                result.isHealthy = (result.tcpPing > 0) // Assume healthy if TCP ping through proxy works
+
+                                                // تست ۳: تاخیر واقعی HTTP از درون پروکسی SOCKS (اتصال به سرور)
+                                                if (isRealDelayChecked && result.isHealthy) {
+                                                    val httpDelay = XrayManager.performRealDelay(uniqueSocksPort, realDelayTimeout, realDelayUrlInput)
+                                                    result.realDelay = httpDelay
+                                                    result.isHealthy = (httpDelay > 0) // Update health based on real delay
+                                                }
+
+                                                // بررسی دسترسی سایت‌ها (فقط در صورتی که اتصال اول به سرور با موفقیت تایید شود)
+                                                if (isWebsiteReachChecked && activeDomains.isNotEmpty() && result.isHealthy) {
+                                                    for (domain in activeDomains) {
+                                                        if (domain.isNotEmpty()) {
+                                                            val report = XrayManager.checkRealProxyDiagnostic(domain, uniqueSocksPort, realDelayTimeout)
+                                                            result.siteReports.add(report)
+                                                        }
+                                                    }
+                                                    // If all sites failed, mark unhealthy
+                                                    if (result.siteReports.all { it.status == SiteStatus.FAILED }) {
+                                                        result.isHealthy = false
+                                                    }
+                                                }
+
+                                                // تست ۴: تست سرعت دانلود
+                                                if (isDownloadSpeedChecked && result.isHealthy) {
+                                                    result.downloadSpeedMbps = XrayManager.performDownloadSpeedTest(uniqueSocksPort, speedTimeout, speedTestUrlInput)
+                                                }
+
+                                                // تست ۵: تست سرعت آپلود
+                                                if (isUploadSpeedChecked && result.isHealthy) {
+                                                    result.uploadSpeedMbps = XrayManager.performUploadSpeedTest(uniqueSocksPort, speedTimeout, speedTestUrlInput)
+                                                }
+
+                                            } catch (e: Exception) {
+                                                Log.e("XrayMultiTest", "Error during test for ${customConfig.remarks}: ${e.message}", e)
+                                                result.isHealthy = false
+                                            } finally {
+                                                xrayProcess?.destroy()
+                                                xrayConfigFile.delete() // Clean up temp config file
                                             }
 
                                             result.smartScore = calculatePreciseScore(result, activeDomains.size)
