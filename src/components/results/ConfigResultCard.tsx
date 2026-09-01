@@ -194,19 +194,30 @@ export const ConfigResultCard: React.FC<ConfigResultCardProps> = ({
           {result.siteReports && result.siteReports.length > 0 && (
             <div className="pt-2 border-t border-neutral-800/30 flex flex-wrap gap-1.5 max-w-full overflow-hidden">
               {result.siteReports.map(report => {
+                const isGemini = report.domain.toLowerCase().includes('gemini') || report.domain.toLowerCase().includes('google');
                 const isSafe = report.status === 'SAFE';
-                const statusColor = isSafe 
-                  ? 'text-emerald-400 border-emerald-950/40 bg-emerald-950/20' 
-                  : 'text-rose-400 border-rose-950/40 bg-rose-950/20';
+                const isSanctioned = report.status === 'SANCTIONED';
                 
+                let statusColor = isSafe 
+                  ? 'text-emerald-400 border-emerald-950/40 bg-emerald-950/20' 
+                  : isSanctioned 
+                    ? 'text-amber-400 border-amber-950/40 bg-amber-950/20' 
+                    : 'text-rose-400 border-rose-950/40 bg-rose-950/20';
+
+                let statusLabel = isSafe 
+                  ? (isGemini ? (lang === 'FA' ? 'جمنای: بدون تحریم' : 'Gemini: Clean') : `${report.domain} (${report.rttMs}ms)`)
+                  : isSanctioned
+                    ? (isGemini ? (lang === 'FA' ? 'جمنای: تحریم 403' : 'Gemini: 403 Sanction') : `${report.domain} (403 Block)`)
+                    : `${report.domain} (${report.status.toLowerCase()})`;
+
                 return (
                   <span 
                     key={report.domain}
-                    className={`text-[10px] font-sans px-2.5 py-1 border rounded-lg flex items-center gap-1.5 ${statusColor} max-w-full overflow-hidden`}
-                    title={`${report.domain} (${isSafe ? `${report.rttMs}ms` : report.status.toLowerCase()})`}
+                    className={`text-[10px] font-sans px-2.5 py-1 border rounded-lg flex items-center gap-1.5 ${statusColor} max-w-full overflow-hidden font-semibold`}
+                    title={`${report.domain} - ${report.errorReason || (isSafe ? `${report.rttMs}ms` : report.status)}`}
                   >
                     <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
-                    <span className="truncate">{report.domain} ({isSafe ? `${report.rttMs}ms` : report.status.toLowerCase()})</span>
+                    <span className="truncate">{statusLabel}</span>
                   </span>
                 );
               })}

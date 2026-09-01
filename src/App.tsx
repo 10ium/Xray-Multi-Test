@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Trash2 } from 'lucide-react';
 import { 
-  XrayConfig, TestResult, TestTarget, UserPersona, FilterOptions 
+  XrayConfig, TestResult, TestTarget, UserPersona, FilterOptions, AppReleaseInfo 
 } from './types';
 import { PersianTranslation, EnglishTranslation } from './Localization';
 import { XrayManager, XrayExporter } from './XrayManager';
@@ -20,17 +20,21 @@ import { ImportConfigsCard } from './components/import/ImportConfigsCard';
 import { ResultsDashboard } from './components/results/ResultsDashboard';
 import { ExportModal } from './components/export/ExportModal';
 import { QRCodeModal } from './components/export/QRCodeModal';
+import { AppUpdateModal } from './components/update/AppUpdateModal';
+
+// Current App Version
+const APP_VERSION = "v1.0.0";
 
 // Default 11 target websites
 const DEFAULT_TEST_TARGETS: TestTarget[] = [
   { domain: "telegram.org", displayName: "Telegram", isSelected: true, category: 'social' },
   { domain: "instagram.com", displayName: "Instagram", isSelected: true, category: 'social' },
-  { domain: "youtube.com", displayName: "YouTube", isSelected: true, category: 'video' },
-  { domain: "tiktok.com", displayName: "TikTok", isSelected: true, category: 'video' },
-  { domain: "x.com", displayName: "X (Twitter)", isSelected: true, category: 'social' },
   { domain: "gemini.google.com", displayName: "Gemini", isSelected: true, category: 'ai' },
   { domain: "chatgpt.com", displayName: "ChatGPT", isSelected: true, category: 'ai' },
   { domain: "claude.ai", displayName: "Claude", isSelected: true, category: 'ai' },
+  { domain: "youtube.com", displayName: "YouTube", isSelected: true, category: 'video' },
+  { domain: "tiktok.com", displayName: "TikTok", isSelected: true, category: 'video' },
+  { domain: "x.com", displayName: "X (Twitter)", isSelected: true, category: 'social' },
   { domain: "grok.com", displayName: "Grok", isSelected: true, category: 'ai' },
   { domain: "store.steampowered.com", displayName: "Steam", isSelected: true, category: 'gaming' },
   { domain: "epicgames.com", displayName: "Epic Games", isSelected: true, category: 'gaming' }
@@ -113,14 +117,20 @@ export default function App() {
   const [coreProgress, setCoreProgress] = useState(0);
   const [coreProgressText, setCoreProgressText] = useState('');
 
-  // 4. Configs & Results State
+  // 4. In-App App Update State
+  const [appReleaseInfo, setAppReleaseInfo] = useState<AppReleaseInfo | null>(null);
+  const [isCheckingAppUpdate, setIsCheckingAppUpdate] = useState(false);
+  const [isAppUpdateModalOpen, setIsAppUpdateModalOpen] = useState(false);
+  const [hasAppUpdate, setHasAppUpdate] = useState(false);
+
+  // 5. Configs & Results State
   const [configsList, setConfigsList] = useState<XrayConfig[]>([]);
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({});
   const [isTestingNetwork, setIsTestingNetwork] = useState(false);
   const [activeTestIndex, setActiveTestIndex] = useState<number | null>(null);
   const [toastMessage, setToastMessage] = useState('');
 
-  // 5. Diagnostics Settings State
+  // 6. Diagnostics Settings State
   const [testPreset, setTestPreset] = useState<'ultra' | 'balanced' | 'stable' | 'custom'>('balanced');
   const [isTcpPingChecked, setIsTcpPingChecked] = useState(true);
   const [isJitterChecked, setIsJitterChecked] = useState(true);
@@ -147,13 +157,13 @@ export default function App() {
   const [tcpConnectTimeout, setTcpConnectTimeout] = useState('2500');
   const [tcpConnectCount, setTcpConnectCount] = useState('3');
 
-  // 6. Target Websites
+  // 7. Target Websites
   const [testTargets, setTestTargets] = useState<TestTarget[]>(() => {
     const saved = localStorage.getItem('test_targets_list');
     return saved ? JSON.parse(saved) : DEFAULT_TEST_TARGETS;
   });
 
-  // 7. uTLS, Fragment & Mux
+  // 8. uTLS, Fragment & Mux
   const [selectedFingerprint, setSelectedFingerprint] = useState('chrome');
   const [isFragmentEnabled, setIsFragmentEnabled] = useState(false);
   const [fragmentPreset, setFragmentPreset] = useState<'mci' | 'mtn' | 'tcp' | 'custom'>('mci');
@@ -163,7 +173,7 @@ export default function App() {
   const [muxConcurrencyInput, setMuxConcurrencyInput] = useState('8');
   const [xudpConcurrencyInput, setXudpConcurrencyInput] = useState('16');
 
-  // 8. Filters & Modals
+  // 9. Filters & Modals
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({
     searchQuery: '',
     selectedProtocol: 'all',
@@ -183,6 +193,8 @@ export default function App() {
   useEffect(() => {
     const parsed = XrayManager.parseConfigsFromMessyText(SAMPLE_CONFIGS_RAW);
     setConfigsList(parsed);
+    // Silent check for App updates on launch
+    checkForAppUpdates(false);
   }, []);
 
   // Save targets to localstorage
@@ -193,6 +205,60 @@ export default function App() {
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(''), 3500);
+  };
+
+  // In-App Update Checker
+  const checkForAppUpdates = async (showFeedback = true) => {
+    setIsCheckingAppUpdate(true);
+    try {
+      const res = await fetch("https://api.github.com/repos/10ium/Xray-Multi-Test/releases/latest");
+      if (res.ok) {
+        const data = await res.json();
+        const latestTag = data.tag_name || "v1.0.0";
+        
+        // Find APK asset
+        let apkUrl = data.html_url;
+        if (data.assets && Array.isArray(data.assets)) {
+          const apkAsset = data.assets.find((a: any) => a.name?.endsWith('.apk'));
+          if (apkAsset && apkAsset.browser_download_url) {
+            apkUrl = apkAsset.browser_download_url;
+          }
+        }
+
+        const isNewer = latestTag.replace('v', '') !== APP_VERSION.replace('v', '');
+        const info: AppReleaseInfo = {
+          version: latestTag,
+          releaseNotes: data.body || "",
+          downloadUrl: apkUrl,
+          publishedAt: data.published_at || "",
+          htmlUrl: data.html_url || "https://github.com/10ium/Xray-Multi-Test/releases",
+          hasUpdate: isNewer
+        };
+
+        setAppReleaseInfo(info);
+        setHasAppUpdate(isNewer);
+
+        if (isNewer) {
+          setIsAppUpdateModalOpen(true);
+        } else if (showFeedback) {
+          showToast(strings.appUpdateUpToDate);
+        }
+      } else if (showFeedback) {
+        showToast(strings.appUpdateUpToDate);
+      }
+    } catch {
+      if (showFeedback) {
+        showToast(lang === 'FA' ? "خطا در بررسی بروزرسانی برنامه" : "Update check failed");
+      }
+    } finally {
+      setIsCheckingAppUpdate(false);
+    }
+  };
+
+  const handleDownloadAndInstallApp = () => {
+    if (!appReleaseInfo) return;
+    window.open(appReleaseInfo.downloadUrl, '_system');
+    showToast(lang === 'FA' ? "در حال باز کردن لینک دانلود APK..." : "Opening APK download...");
   };
 
   // Preset Handlers
@@ -489,6 +555,16 @@ export default function App() {
         lang={lang}
         onToggleLanguage={toggleLanguage}
         coreVersion={localCoreVersion}
+        appVersion={APP_VERSION}
+        hasAppUpdate={hasAppUpdate}
+        isCheckingAppUpdate={isCheckingAppUpdate}
+        onOpenAppUpdate={() => {
+          if (hasAppUpdate && appReleaseInfo) {
+            setIsAppUpdateModalOpen(true);
+          } else {
+            checkForAppUpdates(true);
+          }
+        }}
       />
 
       {/* 2. Persona Selector */}
@@ -722,6 +798,17 @@ export default function App() {
           navigator.clipboard.writeText(raw);
           showToast(lang === 'FA' ? "کانفیگ کپی شد!" : "Config copied!");
         }}
+        strings={strings}
+        lang={lang}
+      />
+
+      {/* In-App Self-Update Modal */}
+      <AppUpdateModal
+        releaseInfo={appReleaseInfo}
+        currentVersion={APP_VERSION}
+        isOpen={isAppUpdateModalOpen}
+        onClose={() => setIsAppUpdateModalOpen(false)}
+        onDownloadAndInstall={handleDownloadAndInstallApp}
         strings={strings}
         lang={lang}
       />

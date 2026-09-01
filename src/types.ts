@@ -125,6 +125,15 @@ export interface FilterOptions {
   sortOrder: 'asc' | 'desc';
 }
 
+export interface AppReleaseInfo {
+  version: string;
+  releaseNotes: string;
+  downloadUrl: string;
+  publishedAt: string;
+  htmlUrl: string;
+  hasUpdate: boolean;
+}
+
 export interface Translation {
   appName: string;
   currentCoreVersion: string;
@@ -239,4 +248,20 @@ export interface Translation {
   scoreBadgeLabel: string;
   noConfigsFound: string;
   importConfigsFirst: string;
+
+  // In-App Update
+  appUpdateTitle: string;
+  appUpdateAvailable: string;
+  appUpdateLatest: string;
+  appUpdateCurrent: string;
+  appUpdateDownloadBtn: string;
+  appUpdateLaterBtn: string;
+  appUpdateCheckBtn: string;
+  appUpdateChecking: string;
+  appUpdateUpToDate: string;
+
+  // Gemini Specific
+  geminiStatusSafe: string;
+  geminiStatusSanctioned: string;
+  geminiStatusPoisoned: string;
 }

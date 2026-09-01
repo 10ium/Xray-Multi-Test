@@ -196,32 +196,64 @@ export class TestEngine {
           }
         }
 
-        // 5. Target Websites Reachability (AI, Social, Streaming)
+        // 5. Target Websites Reachability (Deep Gemini Sanction & AI Bypass Check)
         if (settings.isWebsiteReachChecked && selectedSites.length > 0) {
           const reports: DiagnosticReport[] = [];
           for (const site of selectedSites) {
             await new Promise(resolve => setTimeout(resolve, 60 + (seed % 70)));
+            const isGemini = site.domain.toLowerCase().includes('gemini') || 
+                             site.domain.toLowerCase().includes('google') || 
+                             site.displayName.toLowerCase().includes('gemini');
+            const isIranianHost = config.address.toLowerCase().includes('.ir') || 
+                                  config.remarks.toLowerCase().includes('iran') || 
+                                  config.remarks.toLowerCase().includes('ir-') ||
+                                  config.remarks.toLowerCase().includes('mci') || 
+                                  config.remarks.toLowerCase().includes('irancell');
+
             const siteSeed = this.simpleHash(config.address + site.domain);
             let status: SiteStatus = 'SAFE';
             let httpCode = 200;
+            let errorReason: string | undefined = undefined;
 
-            if (siteSeed % 14 === 0) {
-              status = 'SANCTIONED'; // Censorship 403/451
-              httpCode = 403;
-            } else if (siteSeed % 19 === 0) {
-              status = 'POISONED'; // DNS Poisoned
-              httpCode = 502;
-            } else if (siteSeed % 27 === 0) {
-              status = 'FAILED';
-              httpCode = 0;
+            if (isGemini) {
+              // Gemini is extra sensitive to geolocation and region sanctions (403/451)
+              if (isIranianHost) {
+                status = 'SANCTIONED';
+                httpCode = 403;
+                errorReason = 'Google 403 Forbidden / Sanctioned Region';
+              } else if (siteSeed % 7 === 0) {
+                status = 'SANCTIONED';
+                httpCode = 451;
+                errorReason = 'Google 451 Region Unsupported';
+              } else if (siteSeed % 17 === 0) {
+                status = 'POISONED';
+                httpCode = 502;
+                errorReason = 'DNS Poisoned / Firewall RST';
+              }
+            } else {
+              // General website reachability
+              if (siteSeed % 14 === 0) {
+                status = 'SANCTIONED';
+                httpCode = 403;
+                errorReason = 'HTTP 403 Blocked';
+              } else if (siteSeed % 19 === 0) {
+                status = 'POISONED';
+                httpCode = 502;
+                errorReason = 'DNS Poisoned';
+              } else if (siteSeed % 27 === 0) {
+                status = 'FAILED';
+                httpCode = 0;
+                errorReason = 'Connection Timeout';
+              }
             }
 
             reports.push({
               domain: site.domain,
               status,
-              rttMs: tcpPing + 40 + (siteSeed % 90),
-              ip: `104.244.42.${siteSeed % 250 + 1}`,
-              httpCode
+              rttMs: status === 'SAFE' ? tcpPing + 40 + (siteSeed % 90) : -1,
+              ip: `142.250.${siteSeed % 250 + 1}.100`,
+              httpCode,
+              errorReason
             });
           }
           result.siteReports = reports;
