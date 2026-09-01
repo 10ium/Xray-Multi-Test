@@ -1,0 +1,38 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Vazirmatn:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Vazirmatn", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", "Vazirmatn", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Custom dark scrollbar matching Material dark theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #121212;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2d2d2d;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #444;
+}
+
+/* Base custom classes for RTL / LTR transitions */
+.rtl {
+  direction: rtl;
+  font-family: "Vazirmatn", "Inter", sans-serif;
+}
+
+.ltr {
+  direction: ltr;
+  font-family: "Inter", sans-serif;
+}

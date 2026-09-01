@@ -1,0 +1,8 @@
+{
+  "name": "Xray Multi Test",
+  "description": "An offline-first network diagnostics and evaluator for Xray protocols.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

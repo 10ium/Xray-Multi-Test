@@ -1,0 +1,40 @@
+# Node dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+dist-ssr/
+*.local
+
+# Backups & local agent artifacts
+.backups/
+.agents/
+backup.js
+backup.cjs
+generate_icons.ps1
+
+# Android build outputs & local config
+.gradle/
+android/build/
+android/app/build/
+android/.gradle/
+android/captures/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
