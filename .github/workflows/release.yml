@@ -1,10 +1,10 @@
-name: Build & Release Android App
+name: Build & Release Android APK
 
 on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'App Version Name (e.g., 1.0.0)'
+        description: 'App Version Name (e.g. 1.0.0)'
         required: true
         default: '1.0.0'
 
@@ -17,33 +17,37 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Compile Web App
+        run: npm run build
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'zulu'
 
-      # استفاده از اکشن رسمی گریدل جهت نصب مستقل و کش هوشمند گریدل
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.5' # نسخه پایدار و هماهنگ با پروژه اندروید
+          gradle-version: '8.11.1'
+          validate-wrappers: false
 
-      # فرآیند کامپایل ترافیکی با استفاده از دستور سیستم gradle به جای اسکریپت محلی
-      - name: Build with Gradle
-        run: gradle assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
+      - name: Sync Capacitor Android
+        run: npx cap sync android
 
-      # امضای ریلیز با کلید در صورت تعریف گیت‌هاب سکرتز
-      - name: Sign Release APK
-        if: env.HAS_KEYSTORE == 'true'
-        env:
-          HAS_KEYSTORE: ${{ secrets.SIGNING_KEY != '' }}
-          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      - name: Build Android Release APK
         run: |
-          echo "$SIGNING_KEY" | base64 -d > app/release.keystore
+          cd android
+          ./gradlew assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -51,15 +55,11 @@ jobs:
           tag_name: v${{ github.event.inputs.version_name }}
           name: Release v${{ github.event.inputs.version_name }} (Build ${{ github.run_number }})
           body: |
-            ### مشخصات نسخه منتشر شده
-            - **نسخه نرم‌افزار (Version Name):** `${{ github.event.inputs.version_name }}`
-            - **شماره ساخت (Build Code):** `${{ github.run_number }}`
-            - **تاریخ ساخت:** ${{ github.event.repository.updated_at }}
-            - **توضیحات:** این نسخه به طور خودکار توسط گیت‌هاب اکشن کامپایل و امضا شده است. هسته پیش‌فرض و مکانیزم آپدیت خودکار در نرم‌افزار تعبیه شده است.
+            ### نسخه نهایی و ارتقایافته Xray Multi Test Pro
+            - اضافه شدن ۵ پرسونای کاربری، پارسر جامع، تست دانلود واقعی، آیکون‌های جدید و کارت بروزرسانی
           draft: false
           prerelease: false
           files: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/app-release-unsigned.apk
+            android/app/build/outputs/apk/release/*.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
