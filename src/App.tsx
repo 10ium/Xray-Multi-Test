@@ -21,6 +21,7 @@ import { ResultsDashboard } from './components/results/ResultsDashboard';
 import { ExportModal } from './components/export/ExportModal';
 import { QRCodeModal } from './components/export/QRCodeModal';
 import { AppUpdateModal } from './components/update/AppUpdateModal';
+import { AppUpdaterCard } from './components/update/AppUpdaterCard';
 
 // Current App Version
 const APP_VERSION = "v1.0.0";
@@ -582,6 +583,19 @@ export default function App() {
         
         {/* Left Column (Settings, Updater, Fragment, Mux) - Span 5 */}
         <div className="lg:col-span-5 space-y-6">
+          {/* 1. Android Application Updater Card */}
+          <AppUpdaterCard
+            currentAppVersion={APP_VERSION}
+            releaseInfo={appReleaseInfo}
+            isChecking={isCheckingAppUpdate}
+            onCheckUpdate={() => checkForAppUpdates(true)}
+            onOpenUpdateModal={() => setIsAppUpdateModalOpen(true)}
+            onDirectDownload={handleDownloadAndInstallApp}
+            strings={strings}
+            lang={lang}
+          />
+
+          {/* 2. Xray Core Updater Card */}
           <CoreUpdaterCard
             localCoreVersion={localCoreVersion}
             latestCoreVersion={latestCoreVersion}

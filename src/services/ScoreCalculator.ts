@@ -69,7 +69,13 @@ export class ScoreCalculator {
     const streamingScore = (downloadScore * 0.50) + (realDelayScore * 0.20) + (websiteScore * 0.20) + (packetLossScore * 0.10);
 
     // AI & Bypass Persona: Website Reach (55%) + Real Delay (25%) + Ping (15%) + Packet Loss (5%)
-    const aiScore = (websiteScore * 0.55) + (realDelayScore * 0.25) + (pingScore * 0.15) + (packetLossScore * 0.05);
+    // Critical Gemini Sanction Check: If Gemini is blocked with 403 or 451, heavily penalize AI score
+    const geminiReport = res.siteReports.find(s => s.domain.toLowerCase().includes('gemini') || s.domain.toLowerCase().includes('google'));
+    let geminiMultiplier = 1.0;
+    if (geminiReport && (geminiReport.status === 'SANCTIONED' || geminiReport.status === 'POISONED' || geminiReport.status === 'FAILED')) {
+      geminiMultiplier = 0.30; // Heavy 70% penalty when Gemini fails
+    }
+    const aiScore = ((websiteScore * 0.55) + (realDelayScore * 0.25) + (pingScore * 0.15) + (packetLossScore * 0.05)) * geminiMultiplier;
 
     // Upload Persona: Upload (50%) + Download (20%) + Jitter/Loss (20%) + Real Delay (10%)
     const calculatedUploadScore = (uploadScore * 0.50) + (downloadScore * 0.20) + (((jitterScore + packetLossScore) / 2) * 0.20) + (realDelayScore * 0.10);
