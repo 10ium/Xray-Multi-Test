@@ -47,7 +47,7 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd android
-          ./gradlew assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
+          gradle assembleRelease -PversionName=${{ github.event.inputs.version_name }} -PversionCode=${{ github.run_number }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
